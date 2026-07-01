@@ -1,3 +1,7 @@
+import { Suspense, lazy } from 'react'
+
+const DictionaryManager = lazy(() => import('../components/DictionaryManager'))
+
 const LANGUAGES = [
   { code: 'eng', label: 'English' },
   { code: 'ger', label: 'German' },
@@ -24,9 +28,7 @@ export default function SettingsPage() {
             <label className="mb-1 block text-sm text-slate-300">Primary language</label>
             <select className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500">
               {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.label}
-                </option>
+                <option key={l.code} value={l.code}>{l.label}</option>
               ))}
             </select>
           </div>
@@ -35,9 +37,7 @@ export default function SettingsPage() {
             <select className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500">
               <option value="">None</option>
               {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.label}
-                </option>
+                <option key={l.code} value={l.code}>{l.label}</option>
               ))}
             </select>
           </div>
@@ -48,9 +48,9 @@ export default function SettingsPage() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Dictionaries
         </h3>
-        <div className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm text-slate-400">
-          Dictionary management coming in Phase 2 (SQLite + OPFS)
-        </div>
+        <Suspense fallback={<div className="py-4 text-center text-sm text-slate-500">Loading…</div>}>
+          <DictionaryManager />
+        </Suspense>
       </section>
 
       <section className="mb-6">
@@ -68,9 +68,7 @@ export default function SettingsPage() {
       </section>
 
       <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          About
-        </h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">About</h3>
         <div className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm text-slate-400">
           <p>Sumatora Dictionary</p>
           <p className="mt-1 text-xs">Dictionary data: JMDict (James Breen / EDRDG)</p>
