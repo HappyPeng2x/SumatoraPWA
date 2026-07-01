@@ -4,6 +4,7 @@ import SearchPage from './pages/SearchPage'
 import BookmarksPage from './pages/BookmarksPage'
 import TagsPage from './pages/TagsPage'
 import SettingsPage from './pages/SettingsPage'
+import PWABanners from './components/PWABanners'
 import { useDbInit } from './hooks/useDbInit'
 import { useBookmarks } from './hooks/useBookmarks'
 
@@ -46,6 +47,8 @@ export default function App() {
           {PAGE_TITLES[activeTab]}
         </h1>
       </header>
+
+      <PWABanners />
 
       {/* Page content */}
       <main className="flex flex-1 flex-col overflow-hidden">

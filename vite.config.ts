@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable.png', 'sqlite3.wasm', 'sqlite3-opfs-async-proxy.js'],
       manifest: {
         name: 'Sumatora Dictionary',
