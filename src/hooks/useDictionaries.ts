@@ -78,6 +78,7 @@ export function useDictionaries() {
       const record: InstalledDict = { ...meta, installedAt: Date.now() }
       await saveInstalledDict(record)
       dispatch({ type: 'INSTALLED', dict: record })
+      window.dispatchEvent(new CustomEvent('sumatora:dicts-changed'))
       onProgress({ lang: meta.lang, phase: 'done', downloadedBytes: data.byteLength, totalBytes: data.byteLength })
     } catch (err) {
       onProgress({
@@ -101,6 +102,7 @@ export function useDictionaries() {
     }
     await removeInstalledDict(lang)
     dispatch({ type: 'REMOVED', lang })
+    window.dispatchEvent(new CustomEvent('sumatora:dicts-changed'))
   }, [])
 
   return { ...state, catalogue: CATALOGUE, install, uninstall }

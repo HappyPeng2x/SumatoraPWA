@@ -4,6 +4,7 @@ import SearchPage from './pages/SearchPage'
 import BookmarksPage from './pages/BookmarksPage'
 import TagsPage from './pages/TagsPage'
 import SettingsPage from './pages/SettingsPage'
+import { useDbInit } from './hooks/useDbInit'
 
 export type Tab = 'search' | 'bookmarks' | 'tags' | 'settings'
 
@@ -16,6 +17,7 @@ const PAGE_TITLES: Record<Tab, string> = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('search')
+  const dbState = useDbInit()
 
   return (
     <div
@@ -34,7 +36,7 @@ export default function App() {
 
       {/* Page content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {activeTab === 'search' && <SearchPage />}
+        {activeTab === 'search' && <SearchPage dbState={dbState} />}
         {activeTab === 'bookmarks' && <BookmarksPage />}
         {activeTab === 'tags' && <TagsPage />}
         {activeTab === 'settings' && <SettingsPage />}

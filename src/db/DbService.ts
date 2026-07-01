@@ -1,4 +1,4 @@
-import type { ToWorker, FromWorker, QueryRow, SqlValue } from './types'
+import type { ToWorker, FromWorker, QueryRow, SqlValue, SearchResult } from './types'
 
 type PendingCall = {
   resolve: (v: unknown) => void
@@ -91,5 +91,13 @@ export class DbService {
 
   close() {
     return this.send({ id: this.nextId(), type: 'close' }) as Promise<boolean>
+  }
+
+  initDb(lang: string, backupLang?: string) {
+    return this.send({ id: this.nextId(), type: 'initDb', payload: { lang, backupLang } }) as Promise<{ lang: string; backupLang: string | null }>
+  }
+
+  search(term: string, limit?: number) {
+    return this.send({ id: this.nextId(), type: 'search', payload: { term, limit } }) as Promise<SearchResult[]>
   }
 }

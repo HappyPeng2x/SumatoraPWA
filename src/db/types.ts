@@ -1,6 +1,17 @@
 export type SqlValue = string | number | null
 export type QueryRow = Record<string, SqlValue>
 
+export interface SearchResult {
+  seq: number
+  readingsPrio: string | null
+  readings: string | null
+  writingsPrio: string | null
+  writings: string | null
+  pos: string | null
+  gloss: string | null
+  lang: string
+}
+
 // Messages sent from main thread to the SQLite worker
 export type ToWorker =
   | { id: string; type: 'ping' }
@@ -12,6 +23,8 @@ export type ToWorker =
   | { id: string; type: 'detach'; payload: { alias: string } }
   | { id: string; type: 'query'; payload: { sql: string; params?: SqlValue[] } }
   | { id: string; type: 'close' }
+  | { id: string; type: 'initDb'; payload: { lang: string; backupLang?: string } }
+  | { id: string; type: 'search'; payload: { term: string; limit?: number } }
 
 // Messages sent from worker back to main thread
 export type FromWorker =

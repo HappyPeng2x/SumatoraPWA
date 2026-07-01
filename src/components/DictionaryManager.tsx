@@ -103,9 +103,9 @@ export default function DictionaryManager() {
         <>
           {/* Dev note about local file server */}
           <div className="mb-3 rounded-lg border border-amber-800 bg-amber-900/20 p-3 text-xs text-amber-400">
-            <strong>Dev note:</strong> To install dictionaries, run a local file server from the Android assets directory:
+            <strong>Dev note:</strong> To install dictionaries, run a local file server from the index output directory:
             <code className="mt-1 block rounded bg-slate-800 px-2 py-1 font-mono text-slate-300">
-              cd ~/StudioProjects/SumatoraDictionary/app/src/main/assets/dictionaries && python3 -m http.server 8000
+              cd ~/Code/SumatoraIndex/output-new && python3 -m http.server 8000
             </code>
             The Vite dev server proxies <code className="text-slate-300">/dictionaries/*</code> → <code className="text-slate-300">localhost:8000</code>.
           </div>

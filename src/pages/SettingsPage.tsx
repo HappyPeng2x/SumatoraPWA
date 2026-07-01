@@ -1,4 +1,5 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useState, useEffect } from 'react'
+import { getSetting, setSetting } from '../db/DictionaryStore'
 
 const DictionaryManager = lazy(() => import('../components/DictionaryManager'))
 
@@ -15,6 +16,32 @@ const LANGUAGES = [
 ]
 
 export default function SettingsPage() {
+  const [primaryLang, setPrimaryLang] = useState('eng')
+  const [backupLang, setBackupLang] = useState('')
+
+  useEffect(() => {
+    Promise.all([getSetting('lang'), getSetting('backupLang')]).then(([lang, backup]) => {
+      if (lang) setPrimaryLang(lang)
+      if (backup !== undefined) setBackupLang(backup ?? '')
+    })
+  }, [])
+
+  function handlePrimaryChange(lang: string) {
+    setPrimaryLang(lang)
+    setSetting('lang', lang)
+    if (backupLang === lang) {
+      setBackupLang('')
+      setSetting('backupLang', '')
+    }
+    window.dispatchEvent(new CustomEvent('sumatora:lang-changed'))
+  }
+
+  function handleBackupChange(lang: string) {
+    setBackupLang(lang)
+    setSetting('backupLang', lang)
+    window.dispatchEvent(new CustomEvent('sumatora:lang-changed'))
+  }
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto p-4 text-slate-200">
       <h2 className="mb-4 text-lg font-semibold text-slate-100">Settings</h2>
@@ -26,7 +53,11 @@ export default function SettingsPage() {
         <div className="rounded-lg border border-slate-700 bg-slate-800">
           <div className="border-b border-slate-700 p-3">
             <label className="mb-1 block text-sm text-slate-300">Primary language</label>
-            <select className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500">
+            <select
+              value={primaryLang}
+              onChange={e => handlePrimaryChange(e.target.value)}
+              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+            >
               {LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>{l.label}</option>
               ))}
@@ -34,9 +65,13 @@ export default function SettingsPage() {
           </div>
           <div className="p-3">
             <label className="mb-1 block text-sm text-slate-300">Backup language</label>
-            <select className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500">
+            <select
+              value={backupLang}
+              onChange={e => handleBackupChange(e.target.value)}
+              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+            >
               <option value="">None</option>
-              {LANGUAGES.map((l) => (
+              {LANGUAGES.filter(l => l.code !== primaryLang).map((l) => (
                 <option key={l.code} value={l.code}>{l.label}</option>
               ))}
             </select>
