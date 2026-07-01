@@ -44,6 +44,19 @@ export interface InstalledDict extends DictMeta {
   installedAt: number        // Date.now()
 }
 
+export interface Bookmark {
+  seq: number
+  addedAt: number
+  tags: string[]
+  readingsPrio: string | null
+  readings: string | null
+  writingsPrio: string | null
+  writings: string | null
+  pos: string | null
+  gloss: string | null
+  lang: string
+}
+
 export interface DownloadProgress {
   lang: string
   phase: 'downloading' | 'decompressing' | 'writing' | 'done' | 'error'

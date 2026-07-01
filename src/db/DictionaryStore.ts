@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
-import type { InstalledDict } from './types'
+import type { InstalledDict, Bookmark } from './types'
 
 interface Schema extends DBSchema {
   dicts: {
@@ -10,16 +10,28 @@ interface Schema extends DBSchema {
     key: string
     value: string
   }
+  bookmarks: {
+    key: number
+    value: Bookmark
+    indexes: { addedAt: number; tags: string }
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<Schema>> | null = null
 
-function getDB() {
+export function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<Schema>('sumatora', 1, {
-      upgrade(db) {
-        db.createObjectStore('dicts', { keyPath: 'lang' })
-        db.createObjectStore('settings')
+    dbPromise = openDB<Schema>('sumatora', 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('dicts', { keyPath: 'lang' })
+          db.createObjectStore('settings')
+        }
+        if (oldVersion < 2) {
+          const store = db.createObjectStore('bookmarks', { keyPath: 'seq' })
+          store.createIndex('addedAt', 'addedAt')
+          store.createIndex('tags', 'tags', { multiEntry: true })
+        }
       },
     })
   }

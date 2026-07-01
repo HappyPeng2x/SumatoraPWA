@@ -2,12 +2,15 @@ import { useState, useRef, useCallback } from 'react'
 import { useSearch } from '../hooks/useSearch'
 import EntryCard from '../components/EntryCard'
 import type { DbInitState } from '../hooks/useDbInit'
+import type { SearchResult } from '../db/types'
 
 interface Props {
   dbState: DbInitState
+  bookmarkedSeqs: Set<number>
+  toggleBookmark: (result: SearchResult) => Promise<void>
 }
 
-export default function SearchPage({ dbState }: Props) {
+export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark }: Props) {
   const [term, setTerm] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { results, loading } = useSearch(term, dbState.ready)
@@ -106,7 +109,15 @@ export default function SearchPage({ dbState }: Props) {
           </div>
         ) : (
           <div className="bg-slate-900">
-            {results.map(r => <EntryCard key={r.seq} result={r} primaryLang={dbState.lang} />)}
+            {results.map(r => (
+              <EntryCard
+                key={r.seq}
+                result={r}
+                primaryLang={dbState.lang}
+                isBookmarked={bookmarkedSeqs.has(r.seq)}
+                onToggleBookmark={toggleBookmark}
+              />
+            ))}
           </div>
         )}
       </div>

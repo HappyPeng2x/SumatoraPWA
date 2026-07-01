@@ -5,6 +5,7 @@ import BookmarksPage from './pages/BookmarksPage'
 import TagsPage from './pages/TagsPage'
 import SettingsPage from './pages/SettingsPage'
 import { useDbInit } from './hooks/useDbInit'
+import { useBookmarks } from './hooks/useBookmarks'
 
 export type Tab = 'search' | 'bookmarks' | 'tags' | 'settings'
 
@@ -17,7 +18,19 @@ const PAGE_TITLES: Record<Tab, string> = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('search')
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const dbState = useDbInit()
+  const { bookmarkedSeqs, toggleBookmark } = useBookmarks()
+
+  function handleTabChange(tab: Tab) {
+    if (tab !== 'bookmarks') setSelectedTag(null)
+    setActiveTab(tab)
+  }
+
+  function handleSelectTag(tag: string) {
+    setSelectedTag(tag)
+    setActiveTab('bookmarks')
+  }
 
   return (
     <div
@@ -36,14 +49,30 @@ export default function App() {
 
       {/* Page content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {activeTab === 'search' && <SearchPage dbState={dbState} />}
-        {activeTab === 'bookmarks' && <BookmarksPage />}
-        {activeTab === 'tags' && <TagsPage />}
+        {activeTab === 'search' && (
+          <SearchPage
+            dbState={dbState}
+            bookmarkedSeqs={bookmarkedSeqs}
+            toggleBookmark={toggleBookmark}
+          />
+        )}
+        {activeTab === 'bookmarks' && (
+          <BookmarksPage
+            bookmarkedSeqs={bookmarkedSeqs}
+            toggleBookmark={toggleBookmark}
+            selectedTag={selectedTag}
+            onSelectTag={handleSelectTag}
+            onClearTag={() => setSelectedTag(null)}
+          />
+        )}
+        {activeTab === 'tags' && (
+          <TagsPage onSelectTag={handleSelectTag} />
+        )}
         {activeTab === 'settings' && <SettingsPage />}
       </main>
 
       {/* Bottom tab bar */}
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      <TabBar activeTab={activeTab} onTabChange={handleTabChange} />
     </div>
   )
 }

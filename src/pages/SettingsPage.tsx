@@ -1,5 +1,6 @@
-import { Suspense, lazy, useState, useEffect } from 'react'
+import { Suspense, lazy, useState, useEffect, useRef } from 'react'
 import { getSetting, setSetting } from '../db/DictionaryStore'
+import { exportBookmarks, importBookmarks } from '../db/BookmarkStore'
 
 const DictionaryManager = lazy(() => import('../components/DictionaryManager'))
 
@@ -18,6 +19,7 @@ const LANGUAGES = [
 export default function SettingsPage() {
   const [primaryLang, setPrimaryLang] = useState('eng')
   const [backupLang, setBackupLang] = useState('')
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     Promise.all([getSetting('lang'), getSetting('backupLang')]).then(([lang, backup]) => {
@@ -40,6 +42,33 @@ export default function SettingsPage() {
     setBackupLang(lang)
     setSetting('backupLang', lang)
     window.dispatchEvent(new CustomEvent('sumatora:lang-changed'))
+  }
+
+  async function handleExport() {
+    const data = await exportBookmarks()
+    const json = JSON.stringify(data, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sumatora-bookmarks-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      if (!Array.isArray(data)) throw new Error('Expected an array')
+      await importBookmarks(data)
+    } catch (err) {
+      alert(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
   }
 
   return (
@@ -93,12 +122,25 @@ export default function SettingsPage() {
           Bookmarks
         </h3>
         <div className="flex flex-col gap-2">
-          <button className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700">
+          <button
+            onClick={handleExport}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700"
+          >
             Export bookmarks (JSON)
           </button>
-          <button className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700">
+          <button
+            onClick={() => importInputRef.current?.click()}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700"
+          >
             Import bookmarks (JSON)
           </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleImport}
+          />
         </div>
       </section>
 
