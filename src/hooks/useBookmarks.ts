@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { addBookmark, removeBookmark, getBookmarkedSeqs } from '../db/BookmarkStore'
-import type { SearchResult } from '../db/types'
+import type { EntrySummary } from '../db/types'
 
 export interface BookmarkState {
   bookmarkedSeqs: Set<number>
-  toggleBookmark: (result: SearchResult) => Promise<void>
+  toggleBookmark: (entry: EntrySummary) => Promise<void>
 }
 
 export function useBookmarks(): BookmarkState {
@@ -21,11 +21,11 @@ export function useBookmarks(): BookmarkState {
     return () => window.removeEventListener('sumatora:bookmarks-changed', handler)
   }, [refresh])
 
-  const toggleBookmark = useCallback(async (result: SearchResult) => {
-    if (bookmarkedSeqs.has(result.seq)) {
-      await removeBookmark(result.seq)
+  const toggleBookmark = useCallback(async (entry: EntrySummary) => {
+    if (bookmarkedSeqs.has(entry.seq)) {
+      await removeBookmark(entry.seq)
     } else {
-      await addBookmark(result)
+      await addBookmark(entry)
     }
   }, [bookmarkedSeqs])
 

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import type { SearchResult } from '../db/types'
+import type { EntrySummary } from '../db/types'
 import { DbService } from '../db/DbService'
 
 export function useSearch(term: string, ready: boolean) {
-  const [results, setResults] = useState<SearchResult[]>([])
+  const [results, setResults] = useState<EntrySummary[]>([])
   const [loading, setLoading] = useState(false)
   const abortRef = useRef(false)
 

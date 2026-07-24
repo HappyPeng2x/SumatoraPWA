@@ -1,5 +1,5 @@
 import { getDB } from './DictionaryStore'
-import type { Bookmark, SearchResult } from './types'
+import type { Bookmark, EntrySummary } from './types'
 
 export async function getBookmarks(): Promise<Bookmark[]> {
   const db = await getDB()
@@ -12,20 +12,14 @@ export async function getBookmarkedSeqs(): Promise<Set<number>> {
   return new Set(keys)
 }
 
-export async function addBookmark(result: SearchResult): Promise<void> {
+export async function addBookmark(entry: EntrySummary): Promise<void> {
   const db = await getDB()
-  const existing = await db.get('bookmarks', result.seq)
+  const existing = await db.get('bookmarks', entry.seq)
   const bookmark: Bookmark = {
-    seq: result.seq,
+    seq: entry.seq,
     addedAt: existing?.addedAt ?? Date.now(),
     tags: existing?.tags ?? [],
-    readingsPrio: result.readingsPrio,
-    readings: result.readings,
-    writingsPrio: result.writingsPrio,
-    writings: result.writings,
-    pos: result.pos,
-    gloss: result.gloss,
-    lang: result.lang,
+    entry,
   }
   await db.put('bookmarks', bookmark)
   window.dispatchEvent(new CustomEvent('sumatora:bookmarks-changed'))

@@ -1,4 +1,4 @@
-import type { ToWorker, FromWorker, QueryRow, SqlValue, SearchResult } from './types'
+import type { ToWorker, FromWorker, QueryRow, SqlValue, EntrySummary, EntryDetail, KanjiInfo, PackSource } from './types'
 
 type PendingCall = {
   resolve: (v: unknown) => void
@@ -93,11 +93,25 @@ export class DbService {
     return this.send({ id: this.nextId(), type: 'close' }) as Promise<boolean>
   }
 
-  initDb(lang: string, backupLang?: string) {
-    return this.send({ id: this.nextId(), type: 'initDb', payload: { lang, backupLang } }) as Promise<{ lang: string; backupLang: string | null }>
+  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; backupGloss?: PackSource; kanji?: PackSource }) {
+    return this.send({ id: this.nextId(), type: 'initDb', payload: opts }) as Promise<{ lang: string; backupLang: string | null }>
   }
 
   search(term: string, limit?: number) {
-    return this.send({ id: this.nextId(), type: 'search', payload: { term, limit } }) as Promise<SearchResult[]>
+    return this.send({ id: this.nextId(), type: 'search', payload: { term, limit } }) as Promise<EntrySummary[]>
+  }
+
+  entryDetail(seq: number) {
+    return this.send({ id: this.nextId(), type: 'entryDetail', payload: { seq } }) as Promise<EntryDetail>
+  }
+
+  /** Fetches the same EntrySummary shape a search result uses, for bookmarking a specific seq (e.g. from the detail view). */
+  entrySummary(seq: number) {
+    return this.send({ id: this.nextId(), type: 'entrySummary', payload: { seq } }) as Promise<EntrySummary>
+  }
+
+  /** null when the kanji pack isn't installed/attached, or the character isn't in KANJIDIC2. */
+  kanjiInfo(character: string) {
+    return this.send({ id: this.nextId(), type: 'kanjiInfo', payload: { character } }) as Promise<KanjiInfo | null>
   }
 }

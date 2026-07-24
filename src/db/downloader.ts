@@ -1,20 +1,30 @@
 import type { DownloadProgress } from './types'
 
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', data as BufferSource)
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 /**
- * Fetches a .db.gz URL, decompresses it, and returns the raw database bytes.
- * Calls onProgress throughout so the UI can show a progress bar.
+ * Fetches a .db.gz URL, verifies it against the manifest's sha256 (computed
+ * over the compressed bytes, matching SumatoraIndex's release-dictionaries.py),
+ * decompresses it, and returns the raw database bytes. Calls onProgress
+ * throughout so the UI can show a progress bar.
  */
 export async function downloadAndDecompress(
   url: string,
-  lang: string,
+  key: string,
   onProgress: (p: DownloadProgress) => void,
+  expectedSha256?: string,
 ): Promise<ArrayBuffer> {
-  onProgress({ lang, phase: 'downloading', downloadedBytes: 0, totalBytes: -1 })
+  onProgress({ key, phase: 'downloading', downloadedBytes: 0, totalBytes: -1 })
 
   const response = await fetch(url)
   if (!response.ok) {
     const err = `HTTP ${response.status} fetching ${url}`
-    onProgress({ lang, phase: 'error', downloadedBytes: 0, totalBytes: -1, error: err })
+    onProgress({ key, phase: 'error', downloadedBytes: 0, totalBytes: -1, error: err })
     throw new Error(err)
   }
 
@@ -30,7 +40,7 @@ export async function downloadAndDecompress(
     if (done) break
     chunks.push(value)
     downloadedBytes += value.byteLength
-    onProgress({ lang, phase: 'downloading', downloadedBytes, totalBytes })
+    onProgress({ key, phase: 'downloading', downloadedBytes, totalBytes })
   }
 
   // Concatenate into one buffer
@@ -41,7 +51,16 @@ export async function downloadAndDecompress(
     offset += chunk.byteLength
   }
 
-  onProgress({ lang, phase: 'decompressing', downloadedBytes, totalBytes })
+  if (expectedSha256) {
+    const actual = await sha256Hex(compressed)
+    if (actual !== expectedSha256.toLowerCase()) {
+      const err = `Checksum mismatch for ${url}: expected ${expectedSha256}, got ${actual}`
+      onProgress({ key, phase: 'error', downloadedBytes, totalBytes, error: err })
+      throw new Error(err)
+    }
+  }
+
+  onProgress({ key, phase: 'decompressing', downloadedBytes, totalBytes })
 
   // Decompress with native DecompressionStream
   const ds = new DecompressionStream('gzip')

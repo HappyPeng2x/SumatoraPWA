@@ -2,15 +2,17 @@ import { useState, useRef, useCallback } from 'react'
 import { useSearch } from '../hooks/useSearch'
 import EntryCard from '../components/EntryCard'
 import type { DbInitState } from '../hooks/useDbInit'
-import type { SearchResult } from '../db/types'
+import type { EntrySummary } from '../db/types'
 
 interface Props {
   dbState: DbInitState
   bookmarkedSeqs: Set<number>
-  toggleBookmark: (result: SearchResult) => Promise<void>
+  toggleBookmark: (entry: EntrySummary) => Promise<void>
+  onOpenDetail: (seq: number) => void
+  onKanjiClick: (char: string) => void
 }
 
-export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark }: Props) {
+export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick }: Props) {
   const [term, setTerm] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { results, loading } = useSearch(term, dbState.ready)
@@ -65,6 +67,13 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark }: 
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
+      {/* Online-mode indicator: searching a remote pack rather than a local install (Phase E) */}
+      {dbState.ready && dbState.isRemote && (
+        <div className="border-b border-sky-800 bg-sky-900/30 px-3 py-1.5 text-center text-xs text-sky-300">
+          Searching online — install dictionaries in Settings for offline use.
+        </div>
+      )}
+
       {/* Search bar */}
       <div className="border-b border-slate-700 bg-slate-800 px-3 py-2">
         <div className="relative">
@@ -112,10 +121,11 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark }: 
             {results.map(r => (
               <EntryCard
                 key={r.seq}
-                result={r}
-                primaryLang={dbState.lang}
+                entry={r}
                 isBookmarked={bookmarkedSeqs.has(r.seq)}
                 onToggleBookmark={toggleBookmark}
+                onOpenDetail={onOpenDetail}
+                onKanjiClick={onKanjiClick}
               />
             ))}
           </div>

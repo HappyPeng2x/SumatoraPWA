@@ -12,6 +12,7 @@
   "dependencies": {
     "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "idb": "^8.0.3",
+    "lru-cache": "^11.5.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

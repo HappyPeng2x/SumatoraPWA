@@ -2,11 +2,13 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { getBookmarks, updateBookmarkTags } from '../db/BookmarkStore'
 import EntryCard from '../components/EntryCard'
 import TagEditor from '../components/TagEditor'
-import type { Bookmark, SearchResult } from '../db/types'
+import type { Bookmark, EntrySummary } from '../db/types'
 
 interface Props {
   bookmarkedSeqs: Set<number>
-  toggleBookmark: (result: SearchResult | Bookmark) => Promise<void>
+  toggleBookmark: (entry: EntrySummary) => Promise<void>
+  onOpenDetail: (seq: number) => void
+  onKanjiClick: (char: string) => void
   selectedTag: string | null
   onSelectTag: (tag: string) => void
   onClearTag: () => void
@@ -15,12 +17,18 @@ interface Props {
 function matchesFilter(b: Bookmark, text: string): boolean {
   if (!text) return true
   const q = text.toLowerCase()
-  const fields = [b.writingsPrio, b.writings, b.readingsPrio, b.readings, b.gloss]
-  return fields.some(f => f?.toLowerCase().includes(q)) ||
+  const { entry } = b
+  const fields = [
+    entry.primaryForm.text,
+    ...entry.alternateWritings.map(w => w.text),
+    ...entry.alternateReadings,
+    ...entry.senseGroups.flatMap(g => g.glosses.map(gl => gl.text)),
+  ]
+  return fields.some(f => f.toLowerCase().includes(q)) ||
     b.tags.some(t => t.toLowerCase().includes(q))
 }
 
-export default function BookmarksPage({ bookmarkedSeqs, toggleBookmark, selectedTag, onSelectTag, onClearTag }: Props) {
+export default function BookmarksPage({ bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick, selectedTag, onSelectTag, onClearTag }: Props) {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [filterText, setFilterText] = useState('')
   const [editingSeq, setEditingSeq] = useState<number | null>(null)
@@ -111,9 +119,11 @@ export default function BookmarksPage({ bookmarkedSeqs, toggleBookmark, selected
               <div key={b.seq}>
                 <div className="relative">
                   <EntryCard
-                    result={b}
+                    entry={b.entry}
                     isBookmarked={bookmarkedSeqs.has(b.seq)}
                     onToggleBookmark={toggleBookmark}
+                    onOpenDetail={onOpenDetail}
+                    onKanjiClick={onKanjiClick}
                     tags={b.tags}
                   />
                   {/* Tag edit button */}

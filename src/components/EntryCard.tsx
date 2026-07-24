@@ -1,79 +1,56 @@
-import type { SearchResult, Bookmark } from '../db/types'
-import { JMDICT_ENTITIES } from '../db/jmdictEntities'
+import type { EntrySummary, Tag } from '../db/types'
+import { tagChipClasses } from '../db/tagColors'
+import FuriganaText from './FuriganaText'
 
-function parsePosArray(pos: string | null): string[] {
-  if (!pos) return []
-  try {
-    const parsed = JSON.parse(pos)
-    if (Array.isArray(parsed)) {
-      const flat = (parsed as unknown[]).flatMap(x => Array.isArray(x) ? x : [x])
-      return [...new Set(flat.filter((x): x is string => typeof x === 'string'))]
-    }
-  } catch { /* fall through */ }
-  return pos.split(/[,\s]+/).filter(Boolean)
-}
-
-function parseGlossArray(gloss: string | null): string[] {
-  if (!gloss) return []
-  try {
-    const parsed = JSON.parse(gloss)
-    if (Array.isArray(parsed)) return parsed.filter((g): g is string => typeof g === 'string' && g.length > 0)
-  } catch { /* fall through */ }
-  return gloss ? [gloss] : []
-}
-
-function splitSpace(s: string | null): string[] {
-  if (!s) return []
-  return s.split(' ').filter(Boolean)
-}
-
-function PosTag({ code }: { code: string }) {
-  const label = JMDICT_ENTITIES[code] ?? code
+export function TagChip({ tag }: { tag: Tag }) {
   return (
-    <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-400" title={label}>
-      {code}
+    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${tagChipClasses(tag.category)}`} title={tag.label}>
+      {tag.code}
     </span>
   )
 }
 
 interface Props {
-  result: SearchResult | Bookmark
-  primaryLang?: string
+  entry: EntrySummary
   isBookmarked?: boolean
-  onToggleBookmark?: (result: SearchResult | Bookmark) => void
+  onToggleBookmark?: (entry: EntrySummary) => void
+  onOpenDetail?: (seq: number) => void
+  onKanjiClick?: (char: string) => void
   tags?: string[]
 }
 
-export default function EntryCard({ result, primaryLang, isBookmarked, onToggleBookmark, tags }: Props) {
-  const writings = [...splitSpace(result.writingsPrio), ...splitSpace(result.writings)]
-  const readings = [...splitSpace(result.readingsPrio), ...splitSpace(result.readings)]
-  const posArray = parsePosArray(result.pos)
-  const glosses = parseGlossArray(result.gloss)
-
-  const hasWritings = writings.length > 0
-  const primaryForm = hasWritings ? writings[0] : (readings[0] ?? '')
-  const secondaryForms = hasWritings ? readings : readings.slice(1)
-  const extraForms = hasWritings ? writings.slice(1) : []
-  const isBackup = primaryLang !== undefined && result.lang !== primaryLang
-
-  const effectiveTags = tags ?? ('tags' in result && Array.isArray((result as Bookmark).tags) ? (result as Bookmark).tags : [])
+export default function EntryCard({ entry, isBookmarked, onToggleBookmark, onOpenDetail, onKanjiClick, tags }: Props) {
+  const { primaryForm, alternateWritings, alternateReadings, senseGroups } = entry
 
   return (
-    <div className={`border-b border-slate-700 px-4 py-3 last:border-0${isBackup ? ' opacity-70' : ''}`}>
+    <div className="border-b border-slate-700 px-4 py-3 last:border-0">
       {/* Headword row with bookmark star */}
       <div className="flex items-start gap-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="ja text-xl font-medium text-slate-100">{primaryForm}</span>
-          {secondaryForms.slice(0, 3).map((r, i) => (
-            <span key={i} className="ja text-sm text-slate-400">{r}</span>
+        {/* Not a <button>: kanji characters inside are independently clickable
+            (opens the kanji popup), which HTML disallows nesting inside a real button. */}
+        <div
+          onClick={onOpenDetail ? () => onOpenDetail(entry.seq) : undefined}
+          onKeyDown={onOpenDetail ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail(entry.seq) } } : undefined}
+          role={onOpenDetail ? 'button' : undefined}
+          tabIndex={onOpenDetail ? 0 : undefined}
+          className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-left"
+        >
+          <FuriganaText
+            text={primaryForm.text}
+            segments={primaryForm.furigana}
+            className="ja text-xl font-medium text-slate-100"
+            onKanjiClick={onKanjiClick}
+          />
+          {alternateWritings.slice(0, 3).map((w, i) => (
+            <FuriganaText key={i} text={w.text} segments={w.furigana} className="ja text-sm text-slate-500" onKanjiClick={onKanjiClick} />
           ))}
-          {extraForms.slice(0, 2).map((w, i) => (
-            <span key={i} className="ja text-sm text-slate-500">{w}</span>
+          {alternateReadings.slice(0, 3).map((r, i) => (
+            <span key={i} className="ja text-sm text-slate-400">{r}</span>
           ))}
         </div>
         {onToggleBookmark && (
           <button
-            onClick={() => onToggleBookmark(result)}
+            onClick={() => onToggleBookmark(entry)}
             className={`mt-0.5 flex-shrink-0 text-lg leading-none transition-colors ${isBookmarked ? 'text-amber-400' : 'text-slate-600 hover:text-slate-400'}`}
             aria-label={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
           >
@@ -82,31 +59,33 @@ export default function EntryCard({ result, primaryLang, isBookmarked, onToggleB
         )}
       </div>
 
-      {/* POS tags + backup language badge */}
-      {(posArray.length > 0 || isBackup) && (
-        <div className="mt-1 flex flex-wrap items-center gap-1">
-          {posArray.map((code, i) => <PosTag key={i} code={code} />)}
-          {isBackup && (
-            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-500">
-              {result.lang}
-            </span>
+      {/* Sense groups: tag chips + globally-numbered glosses, dimmed when a group fell back to a backup language */}
+      {senseGroups.map((group, gi) => (
+        <div key={gi} className="mt-1">
+          {group.tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              {group.tags.map((t, i) => <TagChip key={i} tag={t} />)}
+            </div>
+          )}
+          {group.glosses.length > 0 && (
+            <ol
+              start={group.glosses[0].displayNumber}
+              className="mt-0.5 list-inside list-decimal space-y-0.5"
+            >
+              {group.glosses.map((g) => (
+                <li key={g.displayNumber} className={`text-sm ${group.usedBackupLang ? 'text-slate-400' : 'text-slate-300'}`}>
+                  {g.text}
+                </li>
+              ))}
+            </ol>
           )}
         </div>
-      )}
+      ))}
 
-      {/* Glosses */}
-      {glosses.length > 0 && (
-        <ol className="mt-1 list-inside list-decimal space-y-0.5">
-          {glosses.map((g, i) => (
-            <li key={i} className={`text-sm ${isBackup ? 'text-slate-400' : 'text-slate-300'}`}>{g}</li>
-          ))}
-        </ol>
-      )}
-
-      {/* Tags */}
-      {effectiveTags.length > 0 && (
+      {/* User tags (bookmarks only) */}
+      {tags && tags.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {effectiveTags.map((tag, i) => (
+          {tags.map((tag, i) => (
             <span key={i} className="rounded-full bg-indigo-900 px-2 py-0.5 text-xs text-indigo-300">
               {tag}
             </span>

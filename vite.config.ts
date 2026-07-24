@@ -48,8 +48,11 @@ export default defineConfig({
 
   server: {
     proxy: {
-      // Dev proxy: /dictionaries/* → local Python file server on :8000
-      // Run: cd ~/StudioProjects/SumatoraDictionary/app/src/main/assets/dictionaries && python3 -m http.server 8000
+      // Dev proxy: /dictionaries/* → local Python file server on :8000.
+      // Serve a directory containing the schema-v2 packs (sumatora_core.db.gz,
+      // sumatora_gloss_eng.db.gz, ...) plus a dictionaries.xml manifest with
+      // matching sha256 attributes — see ui-parity-and-remote-search-plan.md.
+      // e.g.: cd <packs dir> && python3 -m http.server 8000
       '/dictionaries': {
         target: 'http://localhost:8000',
         rewrite: (path) => path.replace(/^\/dictionaries/, ''),
