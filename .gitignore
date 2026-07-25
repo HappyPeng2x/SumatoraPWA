@@ -24,3 +24,10 @@ dist-ssr
 *.sw?
 .playwright-mcp/
 dev-dist/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

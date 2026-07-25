@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+import { cloudflare } from '@cloudflare/vite-plugin'
+
 export default defineConfig({
   plugins: [
     react(),
@@ -38,6 +40,10 @@ export default defineConfig({
       },
       devOptions: { enabled: true },
     }),
+    // Enables `wrangler dev`/`wrangler deploy` to build+serve this Vite
+    // project as Cloudflare static assets (see wrangler.jsonc) — added when
+    // deploying to Cloudflare Pages/Workers, see ui-parity-and-remote-search-plan.md.
+    cloudflare(),
   ],
 
   optimizeDeps: {
