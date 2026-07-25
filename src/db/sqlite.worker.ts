@@ -51,13 +51,26 @@ const ready = initFn({
   installHttpVfs(s)
 })
 
-// Appends ?vfs=http (or &vfs=http if the URL already has a query string —
-// e.g. once routed through the CORS proxy's ?url=... param) for use in a raw
-// ATTACH DATABASE string, which unlike the oo1.DB constructor has no separate
-// `vfs` option and must encode it into the filename URI itself.
+// SQLite's file: URI syntax treats the FIRST unescaped '?' as introducing
+// ITS OWN vfs=/mode=/... parameter list and strips everything from there
+// out of the path xOpen actually receives. A proxied pack's URL already
+// contains a '?' of its own (the CORS proxy's ?url=... wrapping) -- left
+// unescaped, SQLite silently truncates the path down to just the proxy's
+// bare origin, losing the real target entirely (caught live: every proxied
+// remote pack failed with SQLITE_CANTOPEN, since dev mode never exercises
+// the proxy and never hit this). Escaping it as %3F keeps the whole thing
+// as one opaque path, which SQLite percent-decodes before handing it to
+// the VFS -- restoring the real URL, query string intact.
+function fileUriPath(url: string): string {
+  return encodeURI(url).replace(/\?/g, '%3F')
+}
+
+// Appends ?vfs=http for use in a raw ATTACH DATABASE string, which unlike
+// the oo1.DB constructor has no separate `vfs` option and must encode it
+// into the filename URI itself. Always a bare '?' since fileUriPath already
+// escaped away any '?' the underlying url itself contained.
 function httpAttachUri(url: string): string {
-  const sep = url.includes('?') ? '&' : '?'
-  return `file:${encodeURI(url)}${sep}vfs=http`
+  return `file:${fileUriPath(url)}?vfs=http`
 }
 
 // Opens one PackSource as the MAIN schema: local OPFS, local POSIX-fallback
@@ -65,7 +78,7 @@ function httpAttachUri(url: string): string {
 // remote http VFS.
 async function openMain(source: PackSource, hasOpfs: boolean): Promise<AnyDB> {
   if (!source.local) {
-    return new sqlite3!.oo1.DB({ filename: `file:${encodeURI(source.url)}`, flags: 'r', vfs: 'http' })
+    return new sqlite3!.oo1.DB({ filename: `file:${fileUriPath(source.url)}`, flags: 'r', vfs: 'http' })
   }
   if (hasOpfs) {
     return new sqlite3!.oo1.OpfsDb(`/${source.filename}`, 'r')
