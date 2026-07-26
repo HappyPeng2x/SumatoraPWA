@@ -84,17 +84,29 @@ export function useDbInit(): DbInitState {
           : undefined
 
         const kanji = packSourceFor(dicts.find(d => d.type === 'kanji'), catalogue.find(d => d.type === 'kanji'))
-        // The web-search pack is a release-coupled, remote-only acceleration
-        // artifact. It is never shown as an installable dictionary.
+        // The web-search/web-gloss packs are release-coupled, remote-only
+        // acceleration artifacts. They are never shown as installable
+        // dictionaries; sqlite.worker.ts only actually attaches web-gloss
+        // for a language whose own gloss pack (like core) is remote.
         const webSearchMeta = catalogue.find(d => d.type === 'web-search')
         const webSearch = webSearchMeta?.plainUri
           ? { local: false as const, url: webSearchMeta.plainUri }
+          : undefined
+        const webGlossMeta = catalogue.find(d => d.type === 'web-gloss' && d.lang === lang)
+        const webGloss = webGlossMeta?.plainUri
+          ? { local: false as const, url: webGlossMeta.plainUri }
+          : undefined
+        const backupWebGlossMeta = backupLangCode
+          ? catalogue.find(d => d.type === 'web-gloss' && d.lang === backupLangCode)
+          : undefined
+        const backupWebGloss = backupWebGlossMeta?.plainUri
+          ? { local: false as const, url: backupWebGlossMeta.plainUri }
           : undefined
         const isRemote = !core.local || !gloss.local
 
         const result = await DbService.get().initDb({
           lang, backupLang: backupGloss ? backupLangCode : undefined,
-          core, gloss, webSearch, backupGloss, kanji,
+          core, gloss, webSearch, webGloss, backupGloss, backupWebGloss, kanji,
         })
         if (!cancelled) setState({
           ready: true, lang, backupLang: result.backupLang, error: null,

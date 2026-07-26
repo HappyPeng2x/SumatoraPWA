@@ -138,7 +138,9 @@ export type ToWorker =
       core: PackSource
       gloss: PackSource
       webSearch?: PackSource
+      webGloss?: PackSource
       backupGloss?: PackSource
+      backupWebGloss?: PackSource
       kanji?: PackSource
     } }
   | { id: string; type: 'search'; payload: { term: string; limit?: number; scope?: 'forward' | 'all' } }
@@ -155,7 +157,7 @@ export type FromWorker =
 // 'core' is the required language-neutral index; 'gloss' is a per-language
 // translation pack. kanji/pitch/tatoeba/names/suffix are optional add-ons not
 // yet surfaced in the install UI (Phase C/D).
-export type PackType = 'core' | 'gloss' | 'web-search' | 'kanji' | 'pitch' | 'tatoeba' | 'names' | 'suffix'
+export type PackType = 'core' | 'gloss' | 'web-search' | 'web-gloss' | 'kanji' | 'pitch' | 'tatoeba' | 'names' | 'suffix'
 
 export interface DictMeta {
   type: PackType

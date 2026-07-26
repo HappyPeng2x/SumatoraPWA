@@ -29,6 +29,11 @@ let currentBackupGlossRemote = false
 let currentHasWebSearch = false
 let currentWebSearchHasAndroidOrder = false
 let currentHasPrefixTop = false
+// Per-language, like currentGlossRemote/currentBackupGlossRemote: each
+// gloss language's web-gloss acceleration pack is attached independently,
+// since one could be remote while the other is already installed locally.
+let currentHasWebGloss = false
+let currentHasBackupWebGloss = false
 const searchResultCache = new Map<string, EntrySummary[]>()
 const SEARCH_RESULT_CACHE_SIZE = 32
 
@@ -257,13 +262,15 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentCoreRemote = false
       currentGlossRemote = false
       currentBackupGlossRemote = false
-      const { lang, backupLang, core, gloss, webSearch, backupGloss, kanji } = msg.payload
+      const { lang, backupLang, core, gloss, webSearch, webGloss, backupGloss, backupWebGloss, kanji } = msg.payload
       currentCoreRemote = !core.local
       currentGlossRemote = !gloss.local
       currentBackupGlossRemote = backupGloss ? !backupGloss.local : false
       currentHasWebSearch = false
       currentWebSearchHasAndroidOrder = false
       currentHasPrefixTop = false
+      currentHasWebGloss = false
+      currentHasBackupWebGloss = false
       searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
@@ -285,10 +292,22 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
               currentHasPrefixTop = hasTable(db, 'websearch', 'WebSearchPrefixTop')
             } catch { /* fall back to the remote core FTS path */ }
           }
+          if (webGloss && !core.local && !gloss.local) {
+            try {
+              await attachSource(db, 'webgloss', webGloss, true)
+              currentHasWebGloss = hasTable(db, 'webgloss', 'WebGlossPrefixTop')
+            } catch { /* fall back to live gloss FTS */ }
+          }
           if (backupGloss) {
             try {
               await attachSource(db, backupLang!, backupGloss, true)
               currentBackupLang = backupLang!
+              if (backupWebGloss && !core.local && !backupGloss.local) {
+                try {
+                  await attachSource(db, 'webglossBackup', backupWebGloss, true)
+                  currentHasBackupWebGloss = hasTable(db, 'webglossBackup', 'WebGlossPrefixTop')
+                } catch { /* fall back to live gloss FTS */ }
+              }
             } catch { /* backup not available — silently skip */ }
           }
           if (kanji) {
@@ -307,6 +326,8 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           currentHasWebSearch = false
           currentWebSearchHasAndroidOrder = false
           currentHasPrefixTop = false
+          currentHasWebGloss = false
+          currentHasBackupWebGloss = false
         }
       }
 
@@ -321,10 +342,22 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
             currentHasPrefixTop = hasTable(db, 'websearch', 'WebSearchPrefixTop')
           } catch { /* fall back to the remote core FTS path */ }
         }
+        if (webGloss && !core.local && !gloss.local) {
+          try {
+            await attachSource(db, 'webgloss', webGloss, false)
+            currentHasWebGloss = hasTable(db, 'webgloss', 'WebGlossPrefixTop')
+          } catch { /* fall back to live gloss FTS */ }
+        }
         if (backupGloss) {
           try {
             await attachSource(db, backupLang!, backupGloss, false)
             currentBackupLang = backupLang!
+            if (backupWebGloss && !core.local && !backupGloss.local) {
+              try {
+                await attachSource(db, 'webglossBackup', backupWebGloss, false)
+                currentHasBackupWebGloss = hasTable(db, 'webglossBackup', 'WebGlossPrefixTop')
+              } catch { /* fall back to live gloss FTS */ }
+            }
           } catch { /* backup not available — silently skip */ }
         }
         if (kanji) {
@@ -381,7 +414,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         if (scope === 'all' && !containsJapanese(t)) {
           const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
           glossSeqStep(db, glossLangs, matchToken(t, false), seen, seqs, limit)
-          glossSeqStep(db, glossLangs, matchToken(t, true), seen, seqs, limit)
+          glossPrefixStep(db, glossLangs, t, 'source_key', seen, seqs, limit)
         }
 
         const limitedSeqs = seqs.slice(0, limit)
@@ -411,7 +444,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       if (scope === 'all' && !containsJapanese(t)) {
         const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
         glossStep(db, glossLangs, matchToken(t, false), seen, order, limit)
-        glossStep(db, glossLangs, matchToken(t, true), seen, order, limit)
+        glossPrefixStep(db, glossLangs, t, 'entry_id', seen, order, limit)
       }
 
       const limited = order.slice(0, limit)
@@ -783,6 +816,67 @@ function glossStep(
     for (const row of rows) {
       const id = row['entry_id'] as number
       if (!seen.has(id)) { seen.add(id); order.push(id) }
+    }
+  } catch { /* skip on FTS error or no match */ }
+}
+
+// Resolves whether `lang` has a materialized WebGlossPrefixTop table
+// attached under a fixed alias -- 'webgloss' for the active language,
+// 'webglossBackup' for the backup one (see the 'initDb' case).
+function webGlossTable(lang: string): string | null {
+  if (lang === currentLang && currentHasWebGloss) return 'webgloss'
+  if (lang === currentBackupLang && currentHasBackupWebGloss) return 'webglossBackup'
+  return null
+}
+
+// Reverse-gloss prefix tier: mirrors webPrefixTier's table-first/fallback
+// pattern (see Database.md's Web Gloss Pack section), but merged across
+// every requested language in one query so the combined ordering (by
+// sense_ord, then entry_id) matches Android exactly even when one language
+// hits its table and another falls back to live FTS. `idColumn` picks which
+// column callers want pushed into `order`/`seen` -- source_key for the
+// web-search/gitender path, entry_id for the local SQL-assembly path;
+// WebGlossPrefixTop stores both directly, so one lookup serves either.
+function glossPrefixStep(
+  db: AnyDB, langs: string[], term: string, idColumn: 'source_key' | 'entry_id',
+  seen: Set<number>, order: number[], limit: number,
+) {
+  if (order.length >= limit) return
+  try {
+    const parts: string[] = []
+    const params: SqlValue[] = []
+    for (const lang of langs) {
+      const tableAlias = webGlossTable(lang)
+      if (tableAlias) {
+        parts.push(`
+          SELECT entry_id, source_key, sense_ord
+          FROM "${tableAlias}".WebGlossPrefixTop
+          WHERE prefix = ?`)
+        params.push(term)
+      } else {
+        parts.push(`
+          SELECT s.entry_id AS entry_id, e.source_key AS source_key, s.ord AS sense_ord
+          FROM "${lang}".SenseGloss sg
+          JOIN main.Sense s ON s.sense_id = sg.sense_id
+          JOIN main.Entry e ON e.entry_id = s.entry_id
+          WHERE sg.rowid IN (
+            SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
+          )`)
+        params.push(matchToken(term, true))
+      }
+    }
+    const rows = queryRows(db, `
+      WITH matches AS (${parts.join(' UNION ALL ')})
+      SELECT entry_id, source_key, MIN(sense_ord) AS sense_ord
+      FROM matches
+      GROUP BY entry_id
+      ORDER BY sense_ord, entry_id
+      LIMIT ?`,
+    [...params, limit - order.length + seen.size])
+    for (const row of rows) {
+      const id = idColumn === 'source_key' ? Number(row['source_key']) : (row['entry_id'] as number)
+      if (!seen.has(id)) { seen.add(id); order.push(id) }
+      if (order.length >= limit) break
     }
   } catch { /* skip on FTS error or no match */ }
 }

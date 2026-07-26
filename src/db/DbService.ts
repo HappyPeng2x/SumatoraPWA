@@ -101,7 +101,7 @@ export class DbService {
     return this.send({ id: this.nextId(), type: 'close' }) as Promise<boolean>
   }
 
-  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; webSearch?: PackSource; backupGloss?: PackSource; kanji?: PackSource }) {
+  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; webSearch?: PackSource; webGloss?: PackSource; backupGloss?: PackSource; backupWebGloss?: PackSource; kanji?: PackSource }) {
     return this.send({ id: this.nextId(), type: 'initDb', payload: opts }) as Promise<{ lang: string; backupLang: string | null }>
   }
 
