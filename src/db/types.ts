@@ -131,6 +131,7 @@ export type ToWorker =
       backupLang?: string
       core: PackSource
       gloss: PackSource
+      webSearch?: PackSource
       backupGloss?: PackSource
       kanji?: PackSource
     } }
@@ -148,7 +149,7 @@ export type FromWorker =
 // 'core' is the required language-neutral index; 'gloss' is a per-language
 // translation pack. kanji/pitch/tatoeba/names/suffix are optional add-ons not
 // yet surfaced in the install UI (Phase C/D).
-export type PackType = 'core' | 'gloss' | 'kanji' | 'pitch' | 'tatoeba' | 'names' | 'suffix'
+export type PackType = 'core' | 'gloss' | 'web-search' | 'kanji' | 'pitch' | 'tatoeba' | 'names' | 'suffix'
 
 export interface DictMeta {
   type: PackType

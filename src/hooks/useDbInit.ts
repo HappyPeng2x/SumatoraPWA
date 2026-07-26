@@ -83,10 +83,17 @@ export function useDbInit(): DbInitState {
           : undefined
 
         const kanji = packSourceFor(dicts.find(d => d.type === 'kanji'), catalogue.find(d => d.type === 'kanji'))
+        // The web-search pack is a release-coupled, remote-only acceleration
+        // artifact. It is never shown as an installable dictionary.
+        const webSearchMeta = catalogue.find(d => d.type === 'web-search')
+        const webSearch = webSearchMeta?.plainUri
+          ? { local: false as const, url: webSearchMeta.plainUri }
+          : undefined
         const isRemote = !core.local || !gloss.local
 
         const result = await DbService.get().initDb({
-          lang, backupLang: backupGloss ? backupLangCode : undefined, core, gloss, backupGloss, kanji,
+          lang, backupLang: backupGloss ? backupLangCode : undefined,
+          core, gloss, webSearch, backupGloss, kanji,
         })
         if (!cancelled) setState({
           ready: true, lang, backupLang: result.backupLang, error: null,

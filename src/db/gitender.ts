@@ -9,8 +9,9 @@
 // which already sends Access-Control-Allow-Origin: * — no CORS proxy needed)
 // is drastically cheaper than reconstructing the same entry via dozens of
 // SQLite page reads over HTTP Range requests against the remote core pack.
-// The FTS search step itself still has to hit the remote core pack — gitender
-// has no search index, only pre-rendered content addressed by seq.
+// Forward matching now uses SumatoraIndex's compact web-search pack when the
+// current release provides it; old manifests fall back to the remote core.
+// Gitender itself has no search index, only pre-rendered content by seq.
 import type {
   EntryDetail, EntrySummary, FormSummary, FormsTable, FuriganaSegment, GlossItem,
   LanguageSourceItem, SenseDetail, SenseGroupDetail, SenseGroupSummary, Tag, XrefItem,

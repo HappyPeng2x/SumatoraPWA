@@ -26,6 +26,9 @@ let currentHasKanji = false
 let currentCoreRemote = false
 let currentGlossRemote = false
 let currentBackupGlossRemote = false
+let currentHasWebSearch = false
+const searchResultCache = new Map<string, EntrySummary[]>()
+const SEARCH_RESULT_CACHE_SIZE = 32
 
 // True only when both core and the active gloss language are served
 // remotely (Phase E, nothing installed yet). Mixed local/remote combinations
@@ -228,10 +231,12 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentCoreRemote = false
       currentGlossRemote = false
       currentBackupGlossRemote = false
-      const { lang, backupLang, core, gloss, backupGloss, kanji } = msg.payload
+      const { lang, backupLang, core, gloss, webSearch, backupGloss, kanji } = msg.payload
       currentCoreRemote = !core.local
       currentGlossRemote = !gloss.local
       currentBackupGlossRemote = backupGloss ? !backupGloss.local : false
+      currentHasWebSearch = false
+      searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
       // language-neutral index (core); "{lang}".SenseGloss is translations;
@@ -244,6 +249,12 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         try {
           db = await openMain(core, true)
           await attachSource(db, lang, gloss, true)
+          if (webSearch && !core.local && !gloss.local) {
+            try {
+              await attachSource(db, 'websearch', webSearch, true)
+              currentHasWebSearch = true
+            } catch { /* fall back to the remote core FTS path */ }
+          }
           if (backupGloss) {
             try {
               await attachSource(db, backupLang!, backupGloss, true)
@@ -263,12 +274,19 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           db = null
           currentBackupLang = null
           currentHasKanji = false
+          currentHasWebSearch = false
         }
       }
 
       if (!db) {
         db = await openMain(core, false)
         await attachSource(db, lang, gloss, false)
+        if (webSearch && !core.local && !gloss.local) {
+          try {
+            await attachSource(db, 'websearch', webSearch, false)
+            currentHasWebSearch = true
+          } catch { /* fall back to the remote core FTS path */ }
+        }
         if (backupGloss) {
           try {
             await attachSource(db, backupLang!, backupGloss, false)
@@ -293,6 +311,49 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       const t = term.trim()
       if (!t) return []
       const kata = toKatakana(toHepburn(t))
+      const forms = [...new Set([t, kata])]
+      const cacheKey = `${currentLang}\0${currentBackupLang ?? ''}\0${limit}\0${t}`
+      const cached = searchResultCache.get(cacheKey)
+      if (cached) {
+        // Refresh insertion order to make the tiny map an LRU.
+        searchResultCache.delete(cacheKey)
+        searchResultCache.set(cacheKey, cached)
+        return cached
+      }
+
+      // The dedicated web pack resolves matches directly to JMdict sequence
+      // numbers. It contains no display data: gitender remains the renderer.
+      // This avoids touching the 200+ MB remote core DB at all for ordinary
+      // forward prefix searches.
+      if (currentHasWebSearch && useGitenderPath()) {
+        const seen = new Set<number>()
+        const seqs: number[] = []
+        for (const form of forms) webForwardStep(db, matchToken(form, false), seen, seqs, limit)
+        for (const form of forms) webForwardStep(db, matchToken(form, true), seen, seqs, limit)
+
+        // Translation packs contain Latin-script glosses. Japanese input
+        // cannot produce a useful reverse-language match, so avoid touching
+        // the remote gloss and core packs on the latency-sensitive path.
+        if (!containsJapanese(t)) {
+          glossSeqStep(db, currentLang, matchToken(t, false), seen, seqs, limit)
+          glossSeqStep(db, currentLang, matchToken(t, true), seen, seqs, limit)
+          if (currentBackupLang && seqs.length < limit) {
+            glossSeqStep(db, currentBackupLang, matchToken(t, false), seen, seqs, limit)
+            glossSeqStep(db, currentBackupLang, matchToken(t, true), seen, seqs, limit)
+          }
+        }
+
+        const limitedSeqs = seqs.slice(0, limit)
+        const backupLang = currentBackupGlossRemote ? currentBackupLang : null
+        const rendered = await Promise.all(
+          limitedSeqs.map((seq) => fetchEntrySummaryFromGitender(seq, currentLang!, backupLang)),
+        )
+        const result = rendered.map((entry, i) =>
+          entry ?? assembleEntryBySeq(db!, limitedSeqs[i], currentLang!, currentBackupLang),
+        )
+        cacheSearchResult(cacheKey, result)
+        return result
+      }
 
       // Ordered, deduped list of matched entry_id, built up tier by tier
       // (exact writing/kana, then prefix, then reverse gloss search) —
@@ -302,24 +363,23 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       const seen = new Set<number>()
       const order: number[] = []
 
-      forwardStep(db, matchToken(t, false), seen, order, limit)
-      forwardStep(db, matchToken(kata, false), seen, order, limit)
-      forwardStep(db, matchToken(t, true), seen, order, limit)
-      forwardStep(db, matchToken(kata, true), seen, order, limit)
+      for (const form of forms) forwardStep(db, matchToken(form, false), seen, order, limit)
+      for (const form of forms) forwardStep(db, matchToken(form, true), seen, order, limit)
 
-      glossStep(db, currentLang, matchToken(t, false), seen, order, limit)
-      glossStep(db, currentLang, matchToken(t, true), seen, order, limit)
-      if (currentBackupLang && order.length < limit) {
-        glossStep(db, currentBackupLang, matchToken(t, false), seen, order, limit)
-        glossStep(db, currentBackupLang, matchToken(t, true), seen, order, limit)
+      if (!containsJapanese(t)) {
+        glossStep(db, currentLang, matchToken(t, false), seen, order, limit)
+        glossStep(db, currentLang, matchToken(t, true), seen, order, limit)
+        if (currentBackupLang && order.length < limit) {
+          glossStep(db, currentBackupLang, matchToken(t, false), seen, order, limit)
+          glossStep(db, currentBackupLang, matchToken(t, true), seen, order, limit)
+        }
       }
 
       const limited = order.slice(0, limit)
 
-      // Fully-remote case (Phase E, nothing installed): the FTS match above
-      // still has to touch the remote core pack, but rendering no longer
-      // does -- swap dozens of small page-read requests per result for one
-      // tiny pre-rendered JSON fetch per result instead.
+      // Compatibility path for manifests without the dedicated web-search
+      // pack: matching used the remote core above, but rendering still uses
+      // tiny pre-rendered gitender JSON.
       if (useGitenderPath()) {
         const seqs = seqsForEntryIds(db, limited)
         const backupLang = currentBackupGlossRemote ? currentBackupLang : null
@@ -329,10 +389,14 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         // gitender doesn't have this seq yet (e.g. a release gap), or its
         // fetch timed out -- fall back to SQL assembly for that one result
         // rather than dropping it.
-        return results.map((r, i) => r ?? assembleEntry(db!, limited[i], currentLang!, currentBackupLang))
+        const result = results.map((r, i) => r ?? assembleEntry(db!, limited[i], currentLang!, currentBackupLang))
+        cacheSearchResult(cacheKey, result)
+        return result
       }
 
-      return limited.map((entryId) => assembleEntry(db!, entryId, currentLang!, currentBackupLang))
+      const result = limited.map((entryId) => assembleEntry(db!, entryId, currentLang!, currentBackupLang))
+      cacheSearchResult(cacheKey, result)
+      return result
     }
 
     case 'entryDetail': {
@@ -400,6 +464,46 @@ function matchToken(term: string, prefix: boolean): string {
   return prefix ? `"${escaped}"*` : `"${escaped}"`
 }
 
+function containsJapanese(term: string): boolean {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(term)
+}
+
+function cacheSearchResult(key: string, result: EntrySummary[]): void {
+  searchResultCache.set(key, result)
+  if (searchResultCache.size > SEARCH_RESULT_CACHE_SIZE) {
+    const oldest = searchResultCache.keys().next().value
+    if (oldest !== undefined) searchResultCache.delete(oldest)
+  }
+}
+
+// Online forward search against SumatoraIndex's purpose-built 24 MB pack.
+// WebSearchFts.rowid maps directly to WebSearchResult, whose source_key is
+// the JMdict seq consumed by gitender. No core-pack lookup is involved.
+function webForwardStep(
+  db: AnyDB, matchTerm: string,
+  seen: Set<number>, order: number[], limit: number,
+) {
+  if (order.length >= limit) return
+  try {
+    const rows = queryRows(db, `
+      SELECT wr.source_key AS source_key,
+             MAX(wr.priority) AS priority,
+             MAX(wr.score) AS score
+      FROM websearch.WebSearchResult wr
+      WHERE wr.search_id IN (
+        SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+      )
+      GROUP BY wr.source_key
+      ORDER BY priority DESC, score DESC
+      LIMIT ?`,
+    [matchTerm, limit - order.length])
+    for (const row of rows) {
+      const seq = Number(row['source_key'])
+      if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+    }
+  } catch { /* fall through to later tiers on malformed/no-match FTS input */ }
+}
+
 // Forward (writing/kana/romaji) search over core.SearchTerm/SearchTermFts.
 function forwardStep(
   db: AnyDB, matchTerm: string,
@@ -421,6 +525,31 @@ function forwardStep(
     for (const row of rows) {
       const id = row['entry_id'] as number
       if (!seen.has(id)) { seen.add(id); order.push(id) }
+    }
+  } catch { /* skip on FTS error or no match */ }
+}
+
+// Reverse translation search for the web path, resolving straight to the
+// same JMdict sequence-key namespace as WebSearchResult.
+function glossSeqStep(
+  db: AnyDB, lang: string, matchTerm: string,
+  seen: Set<number>, order: number[], limit: number,
+) {
+  if (order.length >= limit) return
+  try {
+    const rows = queryRows(db, `
+      SELECT DISTINCT e.source_key AS source_key
+      FROM "${lang}".SenseGloss sg
+      JOIN main.Sense s ON s.sense_id = sg.sense_id
+      JOIN main.Entry e ON e.entry_id = s.entry_id
+      WHERE sg.rowid IN (
+        SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
+      )
+      LIMIT ?`,
+    [matchTerm, limit - order.length])
+    for (const row of rows) {
+      const seq = Number(row['source_key'])
+      if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
     }
   } catch { /* skip on FTS error or no match */ }
 }
@@ -448,6 +577,14 @@ function glossStep(
       if (!seen.has(id)) { seen.add(id); order.push(id) }
     }
   } catch { /* skip on FTS error or no match */ }
+}
+
+function assembleEntryBySeq(
+  db: AnyDB, seq: number, lang: string, backupLang: string | null,
+): EntrySummary {
+  const [row] = queryRows(db, `SELECT entry_id FROM main.Entry WHERE source_key = ?`, [String(seq)])
+  if (!row) throw new Error(`Entry not found: ${seq}`)
+  return assembleEntry(db, row['entry_id'] as number, lang, backupLang)
 }
 
 // FormFuriganaSegment rows for one form_id, in display order. null when the

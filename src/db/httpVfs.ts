@@ -47,7 +47,10 @@ const DEFAULTS: Required<HttpVfsOptions> = {
   timeout: 20000,
   maxPageSize: 65536,
   maxMergeBytes: 256 * 1024,
-  cacheSize: 4 * 1024 * 1024,
+  // The dedicated web-search pack is ~24 MB. Keeping most of its hot FTS
+  // pages resident makes incremental prefixes and backspacing effectively
+  // local while staying well below the memory cost of the old core pack.
+  cacheSize: 16 * 1024 * 1024,
   headers: {},
 }
 
@@ -118,6 +121,10 @@ export function installHttpVfs(sqlite3: Sqlite3Static, options?: HttpVfsOptions)
   const capi = s3.capi
   const wasm = s3.wasm
   const openFiles = new Map<FileHandle, OpenFile>()
+  // SQLite commonly probes xAccess and then opens the same immutable URL.
+  // Share metadata/pages by URL so that sequence costs one HEAD rather than
+  // two and reopening/reattaching does not throw away already fetched pages.
+  const filesByUrl = new Map<string, OpenFile>()
 
   const httpVfs = new capi.sqlite3_vfs()
   const httpIoMethods = new capi.sqlite3_io_methods()
@@ -269,13 +276,26 @@ export function installHttpVfs(sqlite3: Sqlite3Static, options?: HttpVfsOptions)
       }
       const url = wasm.cstrToJs(name)
       try {
-        const xhr = new XMLHttpRequest()
-        xhr.open('HEAD', url, false)
-        for (const [h, v] of Object.entries(opts.headers)) xhr.setRequestHeader(h, v)
-        xhr.send()
-        if (xhr.status < 200 || xhr.status >= 300) throw new Error(`HTTP ${xhr.status}`)
-        if (xhr.getResponseHeader('Accept-Ranges') !== 'bytes') {
-          console.warn(`http VFS: ${url} does not advertise 'Accept-Ranges: bytes' — Range requests may not work`)
+        let entry = filesByUrl.get(url)
+        if (!entry) {
+          const xhr = new XMLHttpRequest()
+          xhr.open('HEAD', url, false)
+          for (const [h, v] of Object.entries(opts.headers)) xhr.setRequestHeader(h, v)
+          xhr.send()
+          if (xhr.status < 200 || xhr.status >= 300) throw new Error(`HTTP ${xhr.status}`)
+          if (xhr.getResponseHeader('Accept-Ranges') !== 'bytes') {
+            console.warn(`http VFS: ${url} does not advertise 'Accept-Ranges: bytes' — Range requests may not work`)
+          }
+          entry = {
+            url,
+            size: BigInt(xhr.getResponseHeader('Content-Length') ?? '0'),
+            pageSize: 0,
+            cache: new LRUCache<number, Uint8Array | number>({
+              maxSize: opts.cacheSize,
+              sizeCalculation: (v) => (v instanceof Uint8Array ? v.byteLength : 8),
+            }),
+          }
+          filesByUrl.set(url, entry)
         }
         // Critical: wires up the sqlite3_file struct SQLite already allocated
         // at `fid` so it knows which io_methods vtable to dispatch xRead/
@@ -284,15 +304,7 @@ export function installHttpVfs(sqlite3: Sqlite3Static, options?: HttpVfsOptions)
         // that took most of this debugging session to find.
         const sq3File = new capi.sqlite3_file(fid)
         sq3File.$pMethods = httpIoMethods.pointer
-        openFiles.set(fid, {
-          url,
-          size: BigInt(xhr.getResponseHeader('Content-Length') ?? '0'),
-          pageSize: 0,
-          cache: new LRUCache<number, Uint8Array | number>({
-            maxSize: opts.cacheSize,
-            sizeCalculation: (v) => (v instanceof Uint8Array ? v.byteLength : 8),
-          }),
-        })
+        openFiles.set(fid, entry)
       } catch (e) {
         console.error(`http VFS: xOpen failed for ${url}`, e)
         return capi.SQLITE_CANTOPEN

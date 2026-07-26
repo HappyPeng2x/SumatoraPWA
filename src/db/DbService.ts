@@ -11,6 +11,13 @@ export class DbService {
   private worker: Worker
   private pending = new Map<string, PendingCall>()
   private seq = 0
+  private searchRunning = false
+  private queuedSearch: {
+    term: string
+    limit?: number
+    resolve: (results: EntrySummary[]) => void
+    reject: (error: Error) => void
+  } | null = null
 
   private constructor() {
     this.worker = new Worker(
@@ -93,12 +100,44 @@ export class DbService {
     return this.send({ id: this.nextId(), type: 'close' }) as Promise<boolean>
   }
 
-  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; backupGloss?: PackSource; kanji?: PackSource }) {
+  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; webSearch?: PackSource; backupGloss?: PackSource; kanji?: PackSource }) {
     return this.send({ id: this.nextId(), type: 'initDb', payload: opts }) as Promise<{ lang: string; backupLang: string | null }>
   }
 
   search(term: string, limit?: number) {
-    return this.send({ id: this.nextId(), type: 'search', payload: { term, limit } }) as Promise<EntrySummary[]>
+    return new Promise<EntrySummary[]>((resolve, reject) => {
+      // Synchronous HTTP-VFS reads cannot be interrupted once the worker has
+      // entered xRead. Keep at most one not-yet-started search so rapid input
+      // never builds a queue of obsolete network-heavy queries.
+      if (this.queuedSearch) this.queuedSearch.resolve([])
+      this.queuedSearch = { term, limit, resolve, reject }
+      void this.drainSearchQueue()
+    })
+  }
+
+  private async drainSearchQueue(): Promise<void> {
+    if (this.searchRunning) return
+    this.searchRunning = true
+    try {
+      while (this.queuedSearch) {
+        const next = this.queuedSearch
+        this.queuedSearch = null
+        try {
+          const results = await this.send({
+            id: this.nextId(), type: 'search',
+            payload: { term: next.term, limit: next.limit },
+          }) as EntrySummary[]
+          next.resolve(results)
+        } catch (error) {
+          next.reject(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    } finally {
+      this.searchRunning = false
+      // A request may have arrived between the final loop check and clearing
+      // searchRunning.
+      if (this.queuedSearch) void this.drainSearchQueue()
+    }
   }
 
   entryDetail(seq: number) {
