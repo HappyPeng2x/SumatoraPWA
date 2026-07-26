@@ -28,7 +28,7 @@ let currentGlossRemote = false
 let currentBackupGlossRemote = false
 let currentHasWebSearch = false
 let currentWebSearchHasAndroidOrder = false
-let currentWebSearchHasShortKana = false
+let currentHasPrefixTop = false
 const searchResultCache = new Map<string, EntrySummary[]>()
 const SEARCH_RESULT_CACHE_SIZE = 32
 
@@ -263,7 +263,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentBackupGlossRemote = backupGloss ? !backupGloss.local : false
       currentHasWebSearch = false
       currentWebSearchHasAndroidOrder = false
-      currentWebSearchHasShortKana = false
+      currentHasPrefixTop = false
       searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
@@ -282,7 +282,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
               await attachSource(db, 'websearch', webSearch, true)
               currentHasWebSearch = true
               currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
-              currentWebSearchHasShortKana = hasTable(db, 'websearch', 'WebSearchShortKanaPrefix')
+              currentHasPrefixTop = hasTable(db, 'websearch', 'WebSearchPrefixTop')
             } catch { /* fall back to the remote core FTS path */ }
           }
           if (backupGloss) {
@@ -306,7 +306,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           currentHasKanji = false
           currentHasWebSearch = false
           currentWebSearchHasAndroidOrder = false
-          currentWebSearchHasShortKana = false
+          currentHasPrefixTop = false
         }
       }
 
@@ -318,7 +318,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
             await attachSource(db, 'websearch', webSearch, false)
             currentHasWebSearch = true
             currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
-            currentWebSearchHasShortKana = hasTable(db, 'websearch', 'WebSearchShortKanaPrefix')
+            currentHasPrefixTop = hasTable(db, 'websearch', 'WebSearchPrefixTop')
           } catch { /* fall back to the remote core FTS path */ }
         }
         if (backupGloss) {
@@ -365,8 +365,12 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         const seen = new Set<number>()
         const seqs: number[] = []
         webForwardStep(db, t, kata, false, seen, seqs, limit)
-        if (canUseShortKanaPrefix(t, kata)) {
-          webShortKanaForwardStep(db, t, kata, seen, seqs, limit)
+        // webPrefixStep's fast path assumes the Android ordering columns
+        // (script_order/entry_score/entry_id) webForwardStep's compatibility
+        // branch below covers their absence -- fall back to the same
+        // combined query used for the exact tier above on such old packs.
+        if (currentWebSearchHasAndroidOrder) {
+          webPrefixStep(db, t, kata, seen, seqs, limit)
         } else {
           webForwardStep(db, t, kata, true, seen, seqs, limit)
         }
@@ -607,70 +611,78 @@ function webForwardStep(
   } catch { /* fall through to later tiers on malformed/no-match FTS input */ }
 }
 
-function canUseShortKanaPrefix(writingTerm: string, kanaTerm: string): boolean {
-  return currentWebSearchHasShortKana
-    && /^[a-z]{2}$/i.test(writingTerm)
-    && Array.from(kanaTerm).length <= 2
-}
-
-// Fast path for broad two-letter romaji searches. The writing tiers remain
-// FTS-backed (normally empty or tiny for Latin input), while kana tiers use a
-// covering prefix table whose primary-key order is Android's result order.
-// Fetching seen.size extra rows compensates for exact matches already emitted,
-// so post-query deduplication cannot underfill the page and accidentally start
-// the much more expensive reverse-gloss refinement.
-function webShortKanaForwardStep(
-  db: AnyDB, writingTerm: string, kanaPrefix: string,
+// Prefix-tier step: priority writing, priority kana, non-priority writing,
+// non-priority kana, matching Android's tier 5-8 order. Unlike the exact-tier
+// webForwardStep above (cheap regardless of input, so always a single
+// combined query), any of these four bands can be arbitrarily broad for
+// short input -- see webPrefixTier.
+function webPrefixStep(
+  db: AnyDB, writingTerm: string, kanaTerm: string,
   seen: Set<number>, order: number[], limit: number,
 ) {
-  const writingMatch = matchToken(writingTerm, true)
-  webForwardTier(db, writingMatch, 0, 1, seen, order, limit)
-  webShortKanaTier(db, kanaPrefix, 1, seen, order, limit)
-  webForwardTier(db, writingMatch, 0, 0, seen, order, limit)
-  webShortKanaTier(db, kanaPrefix, 0, seen, order, limit)
+  webPrefixTier(db, 0, writingTerm, 1, seen, order, limit)
+  webPrefixTier(db, 1, kanaTerm, 1, seen, order, limit)
+  webPrefixTier(db, 0, writingTerm, 0, seen, order, limit)
+  webPrefixTier(db, 1, kanaTerm, 0, seen, order, limit)
 }
 
-function webForwardTier(
-  db: AnyDB, matchTerm: string, scriptOrder: number, priorityClass: number,
-  seen: Set<number>, order: number[], limit: number,
-) {
-  if (order.length >= limit) return
-  const rows = queryRows(db, `
-    SELECT wr.source_key AS source_key,
-           MAX(wr.entry_score) AS entry_score, MIN(wr.entry_id) AS entry_id
-    FROM websearch.WebSearchResult wr
-    WHERE wr.script_order = ? AND wr.priority ${priorityClass ? '> 0' : '= 0'}
-      AND wr.search_id IN (
-        SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
-      )
-    GROUP BY wr.source_key
-    ORDER BY entry_score DESC, entry_id
-    LIMIT ?`,
-  [scriptOrder, matchTerm, limit - order.length + seen.size])
-  for (const row of rows) {
-    const seq = Number(row['source_key'])
-    if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
-    if (order.length >= limit) break
-  }
-}
-
-function webShortKanaTier(
-  db: AnyDB, prefix: string, priorityClass: number,
+// Fetches one (script, priority) prefix band. Every call probes
+// WebSearchPrefixTop first -- a single indexed seek on a small, quickly
+// warmed covering table that's cheap even when it misses -- and falls back
+// to a live FTS scan only when this literal prefix wasn't broad enough to
+// be materialized at build time (see SumatoraIndex's split-sumatora-packs.py
+// / Database.md: prefixes are selected by candidate count, not by length or
+// script, so this applies uniformly regardless of input length or script).
+// Fetching seen.size extra rows compensates for exact matches already
+// emitted, so post-query deduplication cannot underfill the page and
+// accidentally start the much more expensive reverse-gloss refinement.
+function webPrefixTier(
+  db: AnyDB, scriptOrder: number, prefix: string, priorityClass: number,
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
-  const rows = queryRows(db, `
-    SELECT source_key
-    FROM websearch.WebSearchShortKanaPrefix
-    WHERE prefix = ? AND priority_class = ?
-    ORDER BY entry_score DESC, entry_id
-    LIMIT ?`,
-  [prefix, priorityClass, limit - order.length + seen.size])
-  for (const row of rows) {
-    const seq = Number(row['source_key'])
-    if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
-    if (order.length >= limit) break
+  const need = limit - order.length + seen.size
+
+  if (currentHasPrefixTop) {
+    const topRows = queryRows(db, `
+      SELECT source_key
+      FROM websearch.WebSearchPrefixTop
+      WHERE script_order = ? AND prefix = ? AND priority_class = ?
+      ORDER BY entry_score DESC, entry_id
+      LIMIT ?`,
+    [scriptOrder, prefix, priorityClass, need])
+    if (topRows.length > 0) {
+      for (const row of topRows) {
+        const seq = Number(row['source_key'])
+        if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+        if (order.length >= limit) break
+      }
+      return
+    }
+    // No materialized row for this literal prefix -- it wasn't broad enough
+    // at build time. Fall through to live FTS, fine since narrow prefixes
+    // are cheap to scan regardless.
   }
+
+  try {
+    const rows = queryRows(db, `
+      SELECT wr.source_key AS source_key,
+             MAX(wr.entry_score) AS entry_score, MIN(wr.entry_id) AS entry_id
+      FROM websearch.WebSearchResult wr
+      WHERE wr.script_order = ? AND wr.priority ${priorityClass ? '> 0' : '= 0'}
+        AND wr.search_id IN (
+          SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+        )
+      GROUP BY wr.source_key
+      ORDER BY entry_score DESC, entry_id
+      LIMIT ?`,
+    [scriptOrder, matchToken(prefix, true), need])
+    for (const row of rows) {
+      const seq = Number(row['source_key'])
+      if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+      if (order.length >= limit) break
+    }
+  } catch { /* fall through to later tiers on malformed/no-match FTS input */ }
 }
 
 // Forward (writing/kana/romaji) search over core.SearchTerm/SearchTermFts.

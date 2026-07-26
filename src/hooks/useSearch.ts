@@ -4,8 +4,9 @@ import { DbService } from '../db/DbService'
 import { getCachedSearch, saveCachedSearch } from '../db/DictionaryStore'
 
 const SEARCH_DEBOUNCE_MS = 100
-const ONLINE_PAGE_SIZE = 18
-const SHORT_ROMAJI_PREVIEW_SIZE = 6
+// Matches how many result cards fit on screen without scrolling -- fetching
+// more up front is wasted work regardless of how fast the query is.
+const ONLINE_PAGE_SIZE = 12
 const LOCAL_LIMIT = 30
 const MAX_ONLINE_RESULTS = 54
 const JAPANESE_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u
@@ -79,28 +80,6 @@ export function useSearch(term: string, context: SearchContext) {
         }
 
         if (context.isRemote) {
-          const useFastPreview = /^[a-z]{2}$/i.test(trimmed)
-            && limit > SHORT_ROMAJI_PREVIEW_SIZE
-          if (useFastPreview) {
-            const preview = await DbService.get().search(
-              trimmed, SHORT_ROMAJI_PREVIEW_SIZE, 'forward',
-            )
-            if (generationRef.current !== generation) return
-            if (preview.length > 0) {
-              displayedForward = true
-              setResults(preview)
-              setLoading(false)
-              setRefining(true)
-              reportTiming({
-                term: trimmed,
-                limit: SHORT_ROMAJI_PREVIEW_SIZE,
-                source: 'remote-forward-preview',
-                firstResultMs: performance.now() - started,
-                resultCount: preview.length,
-              })
-            }
-          }
-
           const forward = await DbService.get().search(trimmed, limit, 'forward')
           if (generationRef.current !== generation) return
 
