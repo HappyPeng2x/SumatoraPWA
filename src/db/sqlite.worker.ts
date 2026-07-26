@@ -27,6 +27,7 @@ let currentCoreRemote = false
 let currentGlossRemote = false
 let currentBackupGlossRemote = false
 let currentHasWebSearch = false
+let currentWebSearchHasAndroidOrder = false
 const searchResultCache = new Map<string, EntrySummary[]>()
 const SEARCH_RESULT_CACHE_SIZE = 32
 
@@ -260,6 +261,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentGlossRemote = !gloss.local
       currentBackupGlossRemote = backupGloss ? !backupGloss.local : false
       currentHasWebSearch = false
+      currentWebSearchHasAndroidOrder = false
       searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
@@ -277,6 +279,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
             try {
               await attachSource(db, 'websearch', webSearch, true)
               currentHasWebSearch = true
+              currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
             } catch { /* fall back to the remote core FTS path */ }
           }
           if (backupGloss) {
@@ -299,6 +302,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           currentBackupLang = null
           currentHasKanji = false
           currentHasWebSearch = false
+          currentWebSearchHasAndroidOrder = false
         }
       }
 
@@ -309,6 +313,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           try {
             await attachSource(db, 'websearch', webSearch, false)
             currentHasWebSearch = true
+            currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
           } catch { /* fall back to the remote core FTS path */ }
         }
         if (backupGloss) {
@@ -337,7 +342,6 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       const searchStarted = performance.now()
       resetHttpVfsStats()
       const kata = toKatakana(toHepburn(t))
-      const forms = [...new Set([t, kata])]
       const cacheKey = `${currentLang}\0${currentBackupLang ?? ''}\0${scope}\0${limit}\0${t}`
       const cached = searchResultCache.get(cacheKey)
       if (cached) {
@@ -355,19 +359,16 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       if (currentHasWebSearch && useGitenderPath()) {
         const seen = new Set<number>()
         const seqs: number[] = []
-        for (const form of forms) webForwardStep(db, matchToken(form, false), seen, seqs, limit)
-        for (const form of forms) webForwardStep(db, matchToken(form, true), seen, seqs, limit)
+        webForwardStep(db, t, kata, false, seen, seqs, limit)
+        webForwardStep(db, t, kata, true, seen, seqs, limit)
 
         // Translation packs contain Latin-script glosses. Japanese input
         // cannot produce a useful reverse-language match, so avoid touching
         // the remote gloss and core packs on the latency-sensitive path.
         if (scope === 'all' && !containsJapanese(t)) {
-          glossSeqStep(db, currentLang, matchToken(t, false), seen, seqs, limit)
-          glossSeqStep(db, currentLang, matchToken(t, true), seen, seqs, limit)
-          if (currentBackupLang && seqs.length < limit) {
-            glossSeqStep(db, currentBackupLang, matchToken(t, false), seen, seqs, limit)
-            glossSeqStep(db, currentBackupLang, matchToken(t, true), seen, seqs, limit)
-          }
+          const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
+          glossSeqStep(db, glossLangs, matchToken(t, false), seen, seqs, limit)
+          glossSeqStep(db, glossLangs, matchToken(t, true), seen, seqs, limit)
         }
 
         const limitedSeqs = seqs.slice(0, limit)
@@ -391,16 +392,13 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       const seen = new Set<number>()
       const order: number[] = []
 
-      for (const form of forms) forwardStep(db, matchToken(form, false), seen, order, limit)
-      for (const form of forms) forwardStep(db, matchToken(form, true), seen, order, limit)
+      forwardStep(db, t, kata, false, seen, order, limit)
+      forwardStep(db, t, kata, true, seen, order, limit)
 
       if (scope === 'all' && !containsJapanese(t)) {
-        glossStep(db, currentLang, matchToken(t, false), seen, order, limit)
-        glossStep(db, currentLang, matchToken(t, true), seen, order, limit)
-        if (currentBackupLang && order.length < limit) {
-          glossStep(db, currentBackupLang, matchToken(t, false), seen, order, limit)
-          glossStep(db, currentBackupLang, matchToken(t, true), seen, order, limit)
-        }
+        const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
+        glossStep(db, glossLangs, matchToken(t, false), seen, order, limit)
+        glossStep(db, glossLangs, matchToken(t, true), seen, order, limit)
       }
 
       const limited = order.slice(0, limit)
@@ -472,6 +470,14 @@ function queryRows(db: AnyDB, sql: string, params: SqlValue[]): QueryRow[] {
   return rows
 }
 
+function hasWebSearchAndroidOrder(db: AnyDB): boolean {
+  const columns = new Set(
+    queryRows(db, `PRAGMA websearch.table_info(WebSearchResult)`, [])
+      .map((row) => String(row['name'])),
+  )
+  return ['script_order', 'entry_id', 'entry_score'].every((column) => columns.has(column))
+}
+
 // Batch-resolves entry_id -> Entry.source_key (the JMdict seq gitender
 // addresses files by), preserving the input order. One cheap primary-key
 // lookup instead of the many joined queries assembleEntry would otherwise
@@ -522,23 +528,61 @@ function reportWorkerSearch(
 // WebSearchFts.rowid maps directly to WebSearchResult, whose source_key is
 // the JMdict seq consumed by gitender. No core-pack lookup is involved.
 function webForwardStep(
-  db: AnyDB, matchTerm: string,
+  db: AnyDB, writingTerm: string, kanaTerm: string, prefix: boolean,
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
   try {
+    const writingMatch = matchToken(writingTerm, prefix)
+    const kanaMatch = matchToken(kanaTerm, prefix)
+    // New packs carry the exact Android ordering keys. Keep the old query as
+    // a compatibility path for already-published packs; it remains bounded
+    // and is replaced automatically after the next dictionary release.
+    if (!currentWebSearchHasAndroidOrder) {
+      const rows = queryRows(db, `
+        SELECT wr.source_key AS source_key,
+               MAX(wr.priority) AS priority,
+               MAX(wr.score) AS score
+        FROM websearch.WebSearchResult wr
+        WHERE wr.search_id IN (
+          SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+          UNION
+          SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+        )
+        GROUP BY wr.source_key
+        ORDER BY priority DESC, score DESC, source_key
+        LIMIT ?`,
+      [writingMatch, kanaMatch, limit - order.length])
+      for (const row of rows) {
+        const seq = Number(row['source_key'])
+        if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+      }
+      return
+    }
+
     const rows = queryRows(db, `
-      SELECT wr.source_key AS source_key,
-             MAX(wr.priority) AS priority,
-             MAX(wr.score) AS score
-      FROM websearch.WebSearchResult wr
-      WHERE wr.search_id IN (
-        SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+      WITH candidates AS (
+        SELECT wr.source_key, wr.entry_id, wr.entry_score,
+               CASE WHEN wr.priority > 0 THEN 0 ELSE 2 END AS tier
+        FROM websearch.WebSearchResult wr
+        WHERE wr.script_order = 0 AND wr.search_id IN (
+          SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+        )
+        UNION ALL
+        SELECT wr.source_key, wr.entry_id, wr.entry_score,
+               CASE WHEN wr.priority > 0 THEN 1 ELSE 3 END AS tier
+        FROM websearch.WebSearchResult wr
+        WHERE wr.script_order = 1 AND wr.search_id IN (
+          SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+        )
       )
-      GROUP BY wr.source_key
-      ORDER BY priority DESC, score DESC
+      SELECT source_key, MIN(tier) AS tier,
+             MAX(entry_score) AS entry_score, MIN(entry_id) AS entry_id
+      FROM candidates
+      GROUP BY source_key
+      ORDER BY tier, entry_score DESC, entry_id
       LIMIT ?`,
-    [matchTerm, limit - order.length])
+    [writingMatch, kanaMatch, limit - order.length])
     for (const row of rows) {
       const seq = Number(row['source_key'])
       if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
@@ -548,22 +592,38 @@ function webForwardStep(
 
 // Forward (writing/kana/romaji) search over core.SearchTerm/SearchTermFts.
 function forwardStep(
-  db: AnyDB, matchTerm: string,
+  db: AnyDB, writingTerm: string, kanaTerm: string, prefix: boolean,
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
   try {
     const sql = `
-      SELECT st.entry_id AS entry_id, MAX(st.priority) AS priority, MAX(st.score) AS score
-      FROM main.SearchTerm st
-      WHERE st.script IN ('writing', 'kana', 'romaji')
-        AND st.search_id IN (
+      WITH candidates AS (
+        SELECT st.entry_id,
+               CASE WHEN st.priority > 0 THEN 0 ELSE 2 END AS tier
+        FROM main.SearchTerm st
+        WHERE st.script = 'writing' AND st.search_id IN (
           SELECT rowid FROM main.SearchTermFts WHERE normalized MATCH ?
         )
-      GROUP BY st.entry_id
-      ORDER BY priority DESC, score DESC
+        UNION ALL
+        SELECT st.entry_id,
+               CASE WHEN st.priority > 0 THEN 1 ELSE 3 END AS tier
+        FROM main.SearchTerm st
+        WHERE st.script = 'kana' AND st.search_id IN (
+          SELECT rowid FROM main.SearchTermFts WHERE normalized MATCH ?
+        )
+      )
+      SELECT c.entry_id AS entry_id, MIN(c.tier) AS tier, e.score AS entry_score
+      FROM candidates c
+      JOIN main.Entry e ON e.entry_id = c.entry_id
+      GROUP BY c.entry_id
+      ORDER BY tier, entry_score DESC, c.entry_id
       LIMIT ?`
-    const rows = queryRows(db, sql, [matchTerm, limit - order.length])
+    const rows = queryRows(db, sql, [
+      matchToken(writingTerm, prefix),
+      matchToken(kanaTerm, prefix),
+      limit - order.length,
+    ])
     for (const row of rows) {
       const id = row['entry_id'] as number
       if (!seen.has(id)) { seen.add(id); order.push(id) }
@@ -574,21 +634,26 @@ function forwardStep(
 // Reverse translation search for the web path, resolving straight to the
 // same JMdict sequence-key namespace as WebSearchResult.
 function glossSeqStep(
-  db: AnyDB, lang: string, matchTerm: string,
+  db: AnyDB, langs: string[], matchTerm: string,
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
   try {
-    const rows = queryRows(db, `
-      SELECT DISTINCT e.source_key AS source_key
+    const matches = langs.map((lang) => `
+      SELECT s.entry_id AS entry_id, s.ord AS sense_ord
       FROM "${lang}".SenseGloss sg
       JOIN main.Sense s ON s.sense_id = sg.sense_id
-      JOIN main.Entry e ON e.entry_id = s.entry_id
       WHERE sg.rowid IN (
         SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
-      )
+      )`).join(' UNION ALL ')
+    const rows = queryRows(db, `
+      WITH matches AS (${matches})
+      SELECT e.source_key AS source_key, MIN(matches.sense_ord) AS sense_ord
+      FROM matches JOIN main.Entry e ON e.entry_id = matches.entry_id
+      GROUP BY matches.entry_id
+      ORDER BY sense_ord, e.entry_id
       LIMIT ?`,
-    [matchTerm, limit - order.length])
+    [...langs.map(() => matchTerm), limit - order.length])
     for (const row of rows) {
       const seq = Number(row['source_key'])
       if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
@@ -600,20 +665,26 @@ function glossSeqStep(
 // -> main.Sense (by sense_id, valid when the gloss pack is from the same
 // SumatoraIndex release as core — see ui-parity-and-remote-search-plan.md).
 function glossStep(
-  db: AnyDB, lang: string, matchTerm: string,
+  db: AnyDB, langs: string[], matchTerm: string,
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
   try {
-    const sql = `
-      SELECT DISTINCT s.entry_id AS entry_id
+    const matches = langs.map((lang) => `
+      SELECT s.entry_id AS entry_id, s.ord AS sense_ord
       FROM "${lang}".SenseGloss sg
       JOIN main.Sense s ON s.sense_id = sg.sense_id
       WHERE sg.rowid IN (
         SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
-      )
+      )`).join(' UNION ALL ')
+    const sql = `
+      WITH matches AS (${matches})
+      SELECT entry_id, MIN(sense_ord) AS sense_ord
+      FROM matches
+      GROUP BY entry_id
+      ORDER BY sense_ord, entry_id
       LIMIT ?`
-    const rows = queryRows(db, sql, [matchTerm, limit - order.length])
+    const rows = queryRows(db, sql, [...langs.map(() => matchTerm), limit - order.length])
     for (const row of rows) {
       const id = row['entry_id'] as number
       if (!seen.has(id)) { seen.add(id); order.push(id) }
