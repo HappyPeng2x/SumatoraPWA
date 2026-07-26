@@ -28,6 +28,7 @@ let currentGlossRemote = false
 let currentBackupGlossRemote = false
 let currentHasWebSearch = false
 let currentWebSearchHasAndroidOrder = false
+let currentWebSearchHasShortKana = false
 const searchResultCache = new Map<string, EntrySummary[]>()
 const SEARCH_RESULT_CACHE_SIZE = 32
 
@@ -262,6 +263,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentBackupGlossRemote = backupGloss ? !backupGloss.local : false
       currentHasWebSearch = false
       currentWebSearchHasAndroidOrder = false
+      currentWebSearchHasShortKana = false
       searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
@@ -280,6 +282,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
               await attachSource(db, 'websearch', webSearch, true)
               currentHasWebSearch = true
               currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
+              currentWebSearchHasShortKana = hasTable(db, 'websearch', 'WebSearchShortKanaPrefix')
             } catch { /* fall back to the remote core FTS path */ }
           }
           if (backupGloss) {
@@ -303,6 +306,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           currentHasKanji = false
           currentHasWebSearch = false
           currentWebSearchHasAndroidOrder = false
+          currentWebSearchHasShortKana = false
         }
       }
 
@@ -314,6 +318,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
             await attachSource(db, 'websearch', webSearch, false)
             currentHasWebSearch = true
             currentWebSearchHasAndroidOrder = hasWebSearchAndroidOrder(db)
+            currentWebSearchHasShortKana = hasTable(db, 'websearch', 'WebSearchShortKanaPrefix')
           } catch { /* fall back to the remote core FTS path */ }
         }
         if (backupGloss) {
@@ -360,7 +365,11 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         const seen = new Set<number>()
         const seqs: number[] = []
         webForwardStep(db, t, kata, false, seen, seqs, limit)
-        webForwardStep(db, t, kata, true, seen, seqs, limit)
+        if (canUseShortKanaPrefix(t, kata)) {
+          webShortKanaForwardStep(db, t, kata, seen, seqs, limit)
+        } else {
+          webForwardStep(db, t, kata, true, seen, seqs, limit)
+        }
 
         // Translation packs contain Latin-script glosses. Japanese input
         // cannot produce a useful reverse-language match, so avoid touching
@@ -478,6 +487,14 @@ function hasWebSearchAndroidOrder(db: AnyDB): boolean {
   return ['script_order', 'entry_id', 'entry_score'].every((column) => columns.has(column))
 }
 
+function hasTable(db: AnyDB, schema: string, table: string): boolean {
+  return queryRows(
+    db,
+    `SELECT 1 FROM "${schema}".sqlite_master WHERE type = 'table' AND name = ?`,
+    [table],
+  ).length > 0
+}
+
 // Batch-resolves entry_id -> Entry.source_key (the JMdict seq gitender
 // addresses files by), preserving the input order. One cheap primary-key
 // lookup instead of the many joined queries assembleEntry would otherwise
@@ -588,6 +605,72 @@ function webForwardStep(
       if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
     }
   } catch { /* fall through to later tiers on malformed/no-match FTS input */ }
+}
+
+function canUseShortKanaPrefix(writingTerm: string, kanaTerm: string): boolean {
+  return currentWebSearchHasShortKana
+    && /^[a-z]{2}$/i.test(writingTerm)
+    && Array.from(kanaTerm).length <= 2
+}
+
+// Fast path for broad two-letter romaji searches. The writing tiers remain
+// FTS-backed (normally empty or tiny for Latin input), while kana tiers use a
+// covering prefix table whose primary-key order is Android's result order.
+// Fetching seen.size extra rows compensates for exact matches already emitted,
+// so post-query deduplication cannot underfill the page and accidentally start
+// the much more expensive reverse-gloss refinement.
+function webShortKanaForwardStep(
+  db: AnyDB, writingTerm: string, kanaPrefix: string,
+  seen: Set<number>, order: number[], limit: number,
+) {
+  const writingMatch = matchToken(writingTerm, true)
+  webForwardTier(db, writingMatch, 0, 1, seen, order, limit)
+  webShortKanaTier(db, kanaPrefix, 1, seen, order, limit)
+  webForwardTier(db, writingMatch, 0, 0, seen, order, limit)
+  webShortKanaTier(db, kanaPrefix, 0, seen, order, limit)
+}
+
+function webForwardTier(
+  db: AnyDB, matchTerm: string, scriptOrder: number, priorityClass: number,
+  seen: Set<number>, order: number[], limit: number,
+) {
+  if (order.length >= limit) return
+  const rows = queryRows(db, `
+    SELECT wr.source_key AS source_key,
+           MAX(wr.entry_score) AS entry_score, MIN(wr.entry_id) AS entry_id
+    FROM websearch.WebSearchResult wr
+    WHERE wr.script_order = ? AND wr.priority ${priorityClass ? '> 0' : '= 0'}
+      AND wr.search_id IN (
+        SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH ?
+      )
+    GROUP BY wr.source_key
+    ORDER BY entry_score DESC, entry_id
+    LIMIT ?`,
+  [scriptOrder, matchTerm, limit - order.length + seen.size])
+  for (const row of rows) {
+    const seq = Number(row['source_key'])
+    if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+    if (order.length >= limit) break
+  }
+}
+
+function webShortKanaTier(
+  db: AnyDB, prefix: string, priorityClass: number,
+  seen: Set<number>, order: number[], limit: number,
+) {
+  if (order.length >= limit) return
+  const rows = queryRows(db, `
+    SELECT source_key
+    FROM websearch.WebSearchShortKanaPrefix
+    WHERE prefix = ? AND priority_class = ?
+    ORDER BY entry_score DESC, entry_id
+    LIMIT ?`,
+  [prefix, priorityClass, limit - order.length + seen.size])
+  for (const row of rows) {
+    const seq = Number(row['source_key'])
+    if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
+    if (order.length >= limit) break
+  }
 }
 
 // Forward (writing/kana/romaji) search over core.SearchTerm/SearchTermFts.
