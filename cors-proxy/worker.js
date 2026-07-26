@@ -9,9 +9,7 @@
 // headers to the response. It has no SQL/dictionary awareness — it only
 // forwards bytes.
 //
-// Deployment is NOT done by Claude — see README.md in this directory. This
-// file is source only, checked in for review; it is not live anywhere until
-// you (the repo owner) run `wrangler deploy` yourself.
+// The production deployment URL is documented in this directory's README.
 
 // Only ever proxy to hosts that actually serve dictionary packs. An open
 // proxy (fetch-any-url) would be an SSRF/abuse vector; this allowlist is

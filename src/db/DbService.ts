@@ -15,6 +15,7 @@ export class DbService {
   private queuedSearch: {
     term: string
     limit?: number
+    scope: 'forward' | 'all'
     resolve: (results: EntrySummary[]) => void
     reject: (error: Error) => void
   } | null = null
@@ -104,13 +105,13 @@ export class DbService {
     return this.send({ id: this.nextId(), type: 'initDb', payload: opts }) as Promise<{ lang: string; backupLang: string | null }>
   }
 
-  search(term: string, limit?: number) {
+  search(term: string, limit?: number, scope: 'forward' | 'all' = 'all') {
     return new Promise<EntrySummary[]>((resolve, reject) => {
       // Synchronous HTTP-VFS reads cannot be interrupted once the worker has
       // entered xRead. Keep at most one not-yet-started search so rapid input
       // never builds a queue of obsolete network-heavy queries.
       if (this.queuedSearch) this.queuedSearch.resolve([])
-      this.queuedSearch = { term, limit, resolve, reject }
+      this.queuedSearch = { term, limit, scope, resolve, reject }
       void this.drainSearchQueue()
     })
   }
@@ -125,7 +126,7 @@ export class DbService {
         try {
           const results = await this.send({
             id: this.nextId(), type: 'search',
-            payload: { term: next.term, limit: next.limit },
+            payload: { term: next.term, limit: next.limit, scope: next.scope },
           }) as EntrySummary[]
           next.resolve(results)
         } catch (error) {

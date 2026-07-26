@@ -1,7 +1,12 @@
 {
-  "name": "sumatora-scaffold",
+  "name": "sumatora-pwa",
   "private": true,
   "version": "0.0.0",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HappyPeng2x/SumatoraPWA.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -45,6 +45,12 @@ export interface EntrySummary {
   lang: string
 }
 
+export interface CachedSearch {
+  key: string
+  cachedAt: number
+  results: EntrySummary[]
+}
+
 export interface FormTierBadge {
   code: string
   label: string
@@ -135,7 +141,7 @@ export type ToWorker =
       backupGloss?: PackSource
       kanji?: PackSource
     } }
-  | { id: string; type: 'search'; payload: { term: string; limit?: number } }
+  | { id: string; type: 'search'; payload: { term: string; limit?: number; scope?: 'forward' | 'all' } }
   | { id: string; type: 'entryDetail'; payload: { seq: number } }
   | { id: string; type: 'entrySummary'; payload: { seq: number } }
   | { id: string; type: 'kanjiInfo'; payload: { character: string } }

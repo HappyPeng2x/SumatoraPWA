@@ -7,7 +7,7 @@ import type {
   SenseDetail, XrefItem, LanguageSourceItem, KanjiInfo,
 } from './types'
 import { toKatakana, toHepburn } from './romkan'
-import { installHttpVfs } from './httpVfs'
+import { getHttpVfsStats, installHttpVfs, resetHttpVfsStats } from './httpVfs'
 import { fetchEntryDetailFromGitender, fetchEntrySummaryFromGitender } from './gitender'
 import type { PackSource } from './types'
 
@@ -43,6 +43,30 @@ function useGitenderPath(): boolean {
 // accepts a Module overrides object. Cast to accept the locateFile option.
 const initFn = sqlite3InitModule as (opts: Record<string, unknown>) => Promise<Sqlite3Static>
 
+function remoteVfsOptions(): { cacheSize: number; maxMergeBytes: number } {
+  const nav = navigator as Navigator & {
+    deviceMemory?: number
+    connection?: { effectiveType?: string }
+  }
+  const memory = nav.deviceMemory
+  const cacheSize = memory !== undefined && memory <= 2
+    ? 4 * 1024 * 1024
+    : memory !== undefined && memory <= 4
+      ? 8 * 1024 * 1024
+      : 16 * 1024 * 1024
+
+  // On high-latency links, larger merged reads are cheaper than additional
+  // round trips. Constrain them on 2G-class links where transferred bytes
+  // are more expensive and sequential read-ahead is likelier to be wasted.
+  const effectiveType = nav.connection?.effectiveType
+  const maxMergeBytes = effectiveType === 'slow-2g' || effectiveType === '2g'
+    ? 64 * 1024
+    : effectiveType === '3g'
+      ? 128 * 1024
+      : 256 * 1024
+  return { cacheSize, maxMergeBytes }
+}
+
 const ready = initFn({
   locateFile: (file: string) => `/${file}`,
   print: (s: string) => console.log('[sqlite]', s),
@@ -51,7 +75,7 @@ const ready = initFn({
   sqlite3 = s
   // Registers the "http" VFS (Phase E) so a pack not installed locally can be
   // queried directly over HTTP Range requests instead — see httpVfs.ts.
-  installHttpVfs(s)
+  installHttpVfs(s, remoteVfsOptions())
 })
 
 // SQLite's file: URI syntax treats the FIRST unescaped '?' as introducing
@@ -307,17 +331,20 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
 
     case 'search': {
       if (!db || !currentLang) throw new Error('DB not initialized. Call initDb first.')
-      const { term, limit = 30 } = msg.payload
+      const { term, limit = 30, scope = 'all' } = msg.payload
       const t = term.trim()
       if (!t) return []
+      const searchStarted = performance.now()
+      resetHttpVfsStats()
       const kata = toKatakana(toHepburn(t))
       const forms = [...new Set([t, kata])]
-      const cacheKey = `${currentLang}\0${currentBackupLang ?? ''}\0${limit}\0${t}`
+      const cacheKey = `${currentLang}\0${currentBackupLang ?? ''}\0${scope}\0${limit}\0${t}`
       const cached = searchResultCache.get(cacheKey)
       if (cached) {
         // Refresh insertion order to make the tiny map an LRU.
         searchResultCache.delete(cacheKey)
         searchResultCache.set(cacheKey, cached)
+        reportWorkerSearch(t, 'memory-cache', searchStarted, cached.length)
         return cached
       }
 
@@ -334,7 +361,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         // Translation packs contain Latin-script glosses. Japanese input
         // cannot produce a useful reverse-language match, so avoid touching
         // the remote gloss and core packs on the latency-sensitive path.
-        if (!containsJapanese(t)) {
+        if (scope === 'all' && !containsJapanese(t)) {
           glossSeqStep(db, currentLang, matchToken(t, false), seen, seqs, limit)
           glossSeqStep(db, currentLang, matchToken(t, true), seen, seqs, limit)
           if (currentBackupLang && seqs.length < limit) {
@@ -352,6 +379,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           entry ?? assembleEntryBySeq(db!, limitedSeqs[i], currentLang!, currentBackupLang),
         )
         cacheSearchResult(cacheKey, result)
+        reportWorkerSearch(t, 'web-search', searchStarted, result.length)
         return result
       }
 
@@ -366,7 +394,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       for (const form of forms) forwardStep(db, matchToken(form, false), seen, order, limit)
       for (const form of forms) forwardStep(db, matchToken(form, true), seen, order, limit)
 
-      if (!containsJapanese(t)) {
+      if (scope === 'all' && !containsJapanese(t)) {
         glossStep(db, currentLang, matchToken(t, false), seen, order, limit)
         glossStep(db, currentLang, matchToken(t, true), seen, order, limit)
         if (currentBackupLang && order.length < limit) {
@@ -391,11 +419,13 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         // rather than dropping it.
         const result = results.map((r, i) => r ?? assembleEntry(db!, limited[i], currentLang!, currentBackupLang))
         cacheSearchResult(cacheKey, result)
+        reportWorkerSearch(t, 'remote-core-fallback', searchStarted, result.length)
         return result
       }
 
       const result = limited.map((entryId) => assembleEntry(db!, entryId, currentLang!, currentBackupLang))
       cacheSearchResult(cacheKey, result)
+      reportWorkerSearch(t, 'local-sql', searchStarted, result.length)
       return result
     }
 
@@ -474,6 +504,18 @@ function cacheSearchResult(key: string, result: EntrySummary[]): void {
     const oldest = searchResultCache.keys().next().value
     if (oldest !== undefined) searchResultCache.delete(oldest)
   }
+}
+
+function reportWorkerSearch(
+  term: string, path: string, started: number, resultCount: number,
+): void {
+  console.debug('[search worker performance]', {
+    term,
+    path,
+    totalMs: performance.now() - started,
+    resultCount,
+    ...getHttpVfsStats(),
+  })
 }
 
 // Online forward search against SumatoraIndex's purpose-built 24 MB pack.

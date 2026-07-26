@@ -7,8 +7,9 @@ packs directly. It forwards `GET`/`HEAD` (with `Range`) to an allowlisted set
 of GitHub asset hosts and streams the response back unmodified except for the
 added CORS headers. It has no SQL or dictionary-specific logic.
 
-**Not deployed.** This is source only, for you to review and deploy under
-your own Cloudflare account — nothing here has been run or published.
+The production Worker is deployed at
+`https://sumatora-pack-proxy.sumatora.workers.dev`. The PWA's production
+build uses this URL through `VITE_PACK_CORS_PROXY`.
 
 ## Deploy
 

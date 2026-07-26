@@ -1,32 +1,35 @@
-# React + TypeScript + Vite
+# Sumatora PWA
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A progressive web application for searching Sumatora Japanese dictionaries,
+online through SQLite HTTP range queries or offline with locally installed
+dictionary packs.
 
-Currently, two official plugins are available:
+The production application is available at
+[dictionary.sumatora.workers.dev](https://dictionary.sumatora.workers.dev).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Development
 
-## React Compiler
+Requires Node.js 22 or newer.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Use `npm run build` for a production build and `npm run lint` for static
+checks.
+
+## Source and licensing
+
+Copyright (C) 2026 Sumatora contributors.
+
+Sumatora PWA is free software licensed under the
+[GNU Affero General Public License version 3](LICENSE), with no option to use
+a later version unless a copyright holder grants one. In SPDX notation:
+`AGPL-3.0-only`.
+
+Users interacting with the deployed application over a network can obtain its
+Corresponding Source from
+[github.com/HappyPeng2x/SumatoraPWA](https://github.com/HappyPeng2x/SumatoraPWA).
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party
+components and dictionary-data attribution.

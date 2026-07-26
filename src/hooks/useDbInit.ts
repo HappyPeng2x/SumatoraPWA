@@ -13,6 +13,7 @@ export interface DbInitState {
   noLang: boolean
   hasKanji: boolean
   isRemote: boolean    // true when core and/or the active gloss pack is served remotely (Phase E) rather than from a local install
+  releaseVersion: number
 }
 
 // Prefers a local install; falls back to the manifest's remote plain .db
@@ -26,7 +27,7 @@ function packSourceFor(installed: InstalledDict | undefined, remote: DictMeta | 
 export function useDbInit(): DbInitState {
   const [state, setState] = useState<DbInitState>({
     ready: false, lang: 'eng', backupLang: null, error: null,
-    noJmdict: false, noLang: false, hasKanji: false, isRemote: false,
+    noJmdict: false, noLang: false, hasKanji: false, isRemote: false, releaseVersion: 0,
   })
   const [trigger, setTrigger] = useState(0)
 
@@ -98,6 +99,10 @@ export function useDbInit(): DbInitState {
         if (!cancelled) setState({
           ready: true, lang, backupLang: result.backupLang, error: null,
           noJmdict: false, noLang: false, hasKanji: !!kanji, isRemote,
+          releaseVersion: webSearchMeta?.version
+            ?? dicts.find(d => d.type === 'core')?.version
+            ?? catalogue.find(d => d.type === 'core')?.version
+            ?? 0,
         })
       } catch (err) {
         if (!cancelled) setState(s => ({ ...s, ready: false, error: String(err) }))

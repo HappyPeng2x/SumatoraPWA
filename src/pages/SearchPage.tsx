@@ -15,7 +15,7 @@ interface Props {
 export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick }: Props) {
   const [term, setTerm] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
-  const { results, loading } = useSearch(term, dbState.ready)
+  const { results, loading, refining, loadMore, canLoadMore } = useSearch(term, dbState)
 
   const handleClear = useCallback(() => {
     setTerm('')
@@ -108,7 +108,7 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
           <div className="flex flex-1 items-center justify-center p-8">
             {emptyHint()}
           </div>
-        ) : loading ? (
+        ) : loading && results.length === 0 ? (
           <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
             Searching…
           </div>
@@ -128,6 +128,21 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
                 onKanjiClick={onKanjiClick}
               />
             ))}
+            {(refining || (loading && results.length > 0)) && (
+              <div className="p-3 text-center text-xs text-slate-500">
+                {refining ? 'Checking translations…' : 'Loading more…'}
+              </div>
+            )}
+            {canLoadMore && !refining && (
+              <div className="p-3 text-center">
+                <button
+                  onClick={loadMore}
+                  className="rounded border border-slate-600 px-4 py-2 text-xs text-slate-300 hover:border-indigo-500 hover:text-white"
+                >
+                  Load more results
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

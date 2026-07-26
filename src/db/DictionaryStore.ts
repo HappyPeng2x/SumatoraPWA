@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
-import type { InstalledDict, Bookmark } from './types'
+import type { InstalledDict, Bookmark, CachedSearch, EntrySummary } from './types'
 
 interface Schema extends DBSchema {
   dicts: {
@@ -15,13 +15,18 @@ interface Schema extends DBSchema {
     value: Bookmark
     indexes: { addedAt: number; tags: string }
   }
+  searchResults: {
+    key: string
+    value: CachedSearch
+    indexes: { cachedAt: number }
+  }
 }
 
 let dbPromise: Promise<IDBPDatabase<Schema>> | null = null
 
 export function getDB() {
   if (!dbPromise) {
-    dbPromise = openDB<Schema>('sumatora', 4, {
+    dbPromise = openDB<Schema>('sumatora', 5, {
       upgrade(db, oldVersion, _newVersion, tx) {
         if (oldVersion < 1) {
           db.createObjectStore('dicts', { keyPath: 'lang' })
@@ -51,10 +56,38 @@ export function getDB() {
           // promised across this change.
           tx.objectStore('bookmarks').clear()
         }
+        if (oldVersion < 5) {
+          const store = db.createObjectStore('searchResults', { keyPath: 'key' })
+          store.createIndex('cachedAt', 'cachedAt')
+        }
       },
     })
   }
   return dbPromise
+}
+
+const MAX_CACHED_SEARCHES = 100
+
+export async function getCachedSearch(key: string): Promise<EntrySummary[] | undefined> {
+  const db = await getDB()
+  return (await db.get('searchResults', key))?.results
+}
+
+export async function saveCachedSearch(key: string, results: EntrySummary[]): Promise<void> {
+  const db = await getDB()
+  await db.put('searchResults', { key, cachedAt: Date.now(), results })
+  const count = await db.count('searchResults')
+  if (count <= MAX_CACHED_SEARCHES) return
+
+  const tx = db.transaction('searchResults', 'readwrite')
+  let cursor = await tx.store.index('cachedAt').openCursor()
+  let remove = count - MAX_CACHED_SEARCHES
+  while (cursor && remove > 0) {
+    await cursor.delete()
+    remove--
+    cursor = await cursor.continue()
+  }
+  await tx.done
 }
 
 export async function getInstalledDicts(): Promise<InstalledDict[]> {

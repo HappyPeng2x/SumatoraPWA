@@ -35,6 +35,31 @@
 import { LRUCache } from 'lru-cache'
 import type { Sqlite3Static } from '@sqlite.org/sqlite-wasm'
 
+export interface HttpVfsStats {
+  rangeRequests: number
+  rangeBytes: number
+  cacheHits: number
+  cacheMisses: number
+}
+
+const stats: HttpVfsStats = {
+  rangeRequests: 0,
+  rangeBytes: 0,
+  cacheHits: 0,
+  cacheMisses: 0,
+}
+
+export function resetHttpVfsStats(): void {
+  stats.rangeRequests = 0
+  stats.rangeBytes = 0
+  stats.cacheHits = 0
+  stats.cacheMisses = 0
+}
+
+export function getHttpVfsStats(): HttpVfsStats {
+  return { ...stats }
+}
+
 export interface HttpVfsOptions {
   timeout?: number              // ms, sqlite3_busy_timeout (default 20000)
   maxPageSize?: number          // reject files whose page size exceeds this (default 65536)
@@ -111,6 +136,8 @@ function fetchRangeSync(url: string, headers: Record<string, string>, start: num
   xhr.send()
   if (xhr.status !== 206 && xhr.status !== 200) throw new Error(`HTTP ${xhr.status} fetching ${url}`)
   if (!(xhr.response instanceof ArrayBuffer)) throw new Error(`Invalid HTTP response for ${url}`)
+  stats.rangeRequests++
+  stats.rangeBytes += xhr.response.byteLength
   return new Uint8Array(xhr.response)
 }
 
@@ -210,6 +237,7 @@ export function installHttpVfs(sqlite3: Sqlite3Static, options?: HttpVfsOptions)
         }
 
         if (data === undefined) {
+          stats.cacheMisses++
           let chunkSize = entry.pageSize
           const prevRaw = Number(page) > 0 ? entry.cache.get(Number(page) - 1) : undefined
           const prev = typeof prevRaw === 'number' ? entry.cache.get(prevRaw) : prevRaw
@@ -227,6 +255,8 @@ export function installHttpVfs(sqlite3: Sqlite3Static, options?: HttpVfsOptions)
           data = fetchRangeSync(entry.url, opts.headers, Number(pageStart), Number(pageStart) + chunkSize - 1)
           entry.cache.set(Number(page), data)
           for (let i = Number(page) + 1; i < Number(page) + pages; i++) entry.cache.set(i, Number(page))
+        } else {
+          stats.cacheHits++
         }
 
         const pageOffset = Number(offsetBig - pageStart)

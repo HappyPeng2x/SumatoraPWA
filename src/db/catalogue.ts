@@ -19,9 +19,8 @@ const REMOTE_MANIFEST_URL =
 const DEV_MANIFEST_URL = '/dictionaries/dictionaries.xml'
 
 // Rewrites a pack's release-asset URL through a CORS-adding proxy in
-// production. Until that proxy is deployed (see ui-parity-and-remote-search-plan.md,
-// Phase A), this is a no-op and direct downloads of non-core/gloss-eng packs
-// from a real deployment will fail with a CORS error — known, tracked there.
+// production. The production value is in .env.production; leaving it unset
+// intentionally falls back to direct asset URLs for local/custom builds.
 const PACK_CORS_PROXY = import.meta.env.VITE_PACK_CORS_PROXY as string | undefined
 
 function proxyUrl(uri: string): string {

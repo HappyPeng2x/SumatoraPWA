@@ -149,7 +149,27 @@ export default function SettingsPage() {
         <div className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm text-slate-400">
           <p>Sumatora Dictionary</p>
           <p className="mt-1 text-xs">Dictionary data: JMDict (James Breen / EDRDG)</p>
-          <p className="mt-0.5 text-xs">License: GPL v3</p>
+          <p className="mt-0.5 text-xs">
+            Application license:{' '}
+            <a
+              href="https://github.com/HappyPeng2x/SumatoraPWA/blob/master/LICENSE"
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-400 underline hover:text-indigo-300"
+            >
+              GNU AGPL v3
+            </a>
+          </p>
+          <p className="mt-0.5 text-xs">
+            <a
+              href="https://github.com/HappyPeng2x/SumatoraPWA"
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-400 underline hover:text-indigo-300"
+            >
+              Corresponding source code
+            </a>
+          </p>
         </div>
       </section>
     </div>
