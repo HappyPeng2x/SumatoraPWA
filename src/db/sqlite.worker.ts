@@ -413,7 +413,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
         // the remote gloss and core packs on the latency-sensitive path.
         if (scope === 'all' && !containsJapanese(t)) {
           const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
-          glossSeqStep(db, glossLangs, matchToken(t, false), seen, seqs, limit)
+          glossExactStep(db, glossLangs, t, 'source_key', seen, seqs, limit)
           glossPrefixStep(db, glossLangs, t, 'source_key', seen, seqs, limit)
         }
 
@@ -443,7 +443,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
 
       if (scope === 'all' && !containsJapanese(t)) {
         const glossLangs = currentBackupLang ? [currentLang, currentBackupLang] : [currentLang]
-        glossStep(db, glossLangs, matchToken(t, false), seen, order, limit)
+        glossExactStep(db, glossLangs, t, 'entry_id', seen, order, limit)
         glossPrefixStep(db, glossLangs, t, 'entry_id', seen, order, limit)
       }
 
@@ -759,126 +759,107 @@ function forwardStep(
   } catch { /* skip on FTS error or no match */ }
 }
 
-// Reverse translation search for the web path, resolving straight to the
-// same JMdict sequence-key namespace as WebSearchResult.
-function glossSeqStep(
-  db: AnyDB, langs: string[], matchTerm: string,
-  seen: Set<number>, order: number[], limit: number,
-) {
-  if (order.length >= limit) return
-  try {
-    const matches = langs.map((lang) => `
-      SELECT s.entry_id AS entry_id, s.ord AS sense_ord
-      FROM "${lang}".SenseGloss sg
-      JOIN main.Sense s ON s.sense_id = sg.sense_id
-      WHERE sg.rowid IN (
-        SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
-      )`).join(' UNION ALL ')
-    const rows = queryRows(db, `
-      WITH matches AS (${matches})
-      SELECT e.source_key AS source_key, MIN(matches.sense_ord) AS sense_ord
-      FROM matches JOIN main.Entry e ON e.entry_id = matches.entry_id
-      GROUP BY matches.entry_id
-      ORDER BY sense_ord, e.entry_id
-      LIMIT ?`,
-    [...langs.map(() => matchTerm), limit - order.length])
-    for (const row of rows) {
-      const seq = Number(row['source_key'])
-      if (!seen.has(seq)) { seen.add(seq); order.push(seq) }
-    }
-  } catch { /* skip on FTS error or no match */ }
-}
-
-// Reverse (translation) search: {lang}.GlossSearchFts -> {lang}.SenseGloss
-// -> main.Sense (by sense_id, valid when the gloss pack is from the same
-// SumatoraIndex release as core — see ui-parity-and-remote-search-plan.md).
-function glossStep(
-  db: AnyDB, langs: string[], matchTerm: string,
-  seen: Set<number>, order: number[], limit: number,
-) {
-  if (order.length >= limit) return
-  try {
-    const matches = langs.map((lang) => `
-      SELECT s.entry_id AS entry_id, s.ord AS sense_ord
-      FROM "${lang}".SenseGloss sg
-      JOIN main.Sense s ON s.sense_id = sg.sense_id
-      WHERE sg.rowid IN (
-        SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
-      )`).join(' UNION ALL ')
-    const sql = `
-      WITH matches AS (${matches})
-      SELECT entry_id, MIN(sense_ord) AS sense_ord
-      FROM matches
-      GROUP BY entry_id
-      ORDER BY sense_ord, entry_id
-      LIMIT ?`
-    const rows = queryRows(db, sql, [...langs.map(() => matchTerm), limit - order.length])
-    for (const row of rows) {
-      const id = row['entry_id'] as number
-      if (!seen.has(id)) { seen.add(id); order.push(id) }
-    }
-  } catch { /* skip on FTS error or no match */ }
-}
-
-// Resolves whether `lang` has a materialized WebGlossPrefixTop table
-// attached under a fixed alias -- 'webgloss' for the active language,
-// 'webglossBackup' for the backup one (see the 'initDb' case).
+// Resolves whether `lang` has a materialized web-gloss pack (carrying both
+// WebGlossPrefixTop and WebGlossExactTop) attached under a fixed alias --
+// 'webgloss' for the active language, 'webglossBackup' for the backup one
+// (see the 'initDb' case).
 function webGlossTable(lang: string): string | null {
   if (lang === currentLang && currentHasWebGloss) return 'webgloss'
   if (lang === currentBackupLang && currentHasBackupWebGloss) return 'webglossBackup'
   return null
 }
 
-// Reverse-gloss prefix tier: mirrors webPrefixTier's table-first/fallback
-// pattern (see Database.md's Web Gloss Pack section), but merged across
-// every requested language in one query so the combined ordering (by
-// sense_ord, then entry_id) matches Android exactly even when one language
-// hits its table and another falls back to live FTS. `idColumn` picks which
-// column callers want pushed into `order`/`seen` -- source_key for the
-// web-search/gitender path, entry_id for the local SQL-assembly path;
-// WebGlossPrefixTop stores both directly, so one lookup serves either.
-function glossPrefixStep(
-  db: AnyDB, langs: string[], term: string, idColumn: 'source_key' | 'entry_id',
+// Picks, per language, whether to read a reverse-gloss tier from its
+// materialized web-gloss table or from live FTS -- checked against this
+// literal term, not just against whether the pack is attached: the table
+// only covers terms broad enough to have been materialized at build time
+// (see Database.md's Web Gloss Pack section), so a language whose pack IS
+// attached still needs the live-FTS fragment for any narrower term that
+// isn't in it. The LIMIT 1 probe is cheap: a single indexed seek on a small
+// covering table.
+function glossFragment(
+  db: AnyDB, lang: string, tableName: 'WebGlossPrefixTop' | 'WebGlossExactTop',
+  keyColumn: 'prefix' | 'term', term: string, ftsIsPrefix: boolean,
+): { sql: string; param: SqlValue } {
+  const tableAlias = webGlossTable(lang)
+  if (tableAlias) {
+    const probe = queryRows(db, `
+      SELECT 1 FROM "${tableAlias}".${tableName} WHERE ${keyColumn} = ? LIMIT 1`,
+    [term])
+    if (probe.length > 0) {
+      return {
+        sql: `
+          SELECT entry_id, source_key, sense_ord
+          FROM "${tableAlias}".${tableName}
+          WHERE ${keyColumn} = ?`,
+        param: term,
+      }
+    }
+  }
+  return {
+    sql: `
+      SELECT s.entry_id AS entry_id, e.source_key AS source_key, s.ord AS sense_ord
+      FROM "${lang}".SenseGloss sg
+      JOIN main.Sense s ON s.sense_id = sg.sense_id
+      JOIN main.Entry e ON e.entry_id = s.entry_id
+      WHERE sg.rowid IN (
+        SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
+      )`,
+    param: matchToken(term, ftsIsPrefix),
+  }
+}
+
+// Merges glossFragment's per-language choice into one query, across every
+// requested language, so the combined ordering (by sense_ord, then
+// entry_id) matches Android exactly even when one language hits its table
+// and another falls back to live FTS. `idColumn` picks which column callers
+// want pushed into `order`/`seen` -- source_key for the web-search/gitender
+// path, entry_id for the local SQL-assembly path; both tables store both
+// columns directly, so one lookup serves either.
+function glossMergeStep(
+  db: AnyDB, langs: string[], term: string,
+  tableName: 'WebGlossPrefixTop' | 'WebGlossExactTop', keyColumn: 'prefix' | 'term',
+  ftsIsPrefix: boolean, idColumn: 'source_key' | 'entry_id',
   seen: Set<number>, order: number[], limit: number,
 ) {
   if (order.length >= limit) return
   try {
-    const parts: string[] = []
-    const params: SqlValue[] = []
-    for (const lang of langs) {
-      const tableAlias = webGlossTable(lang)
-      if (tableAlias) {
-        parts.push(`
-          SELECT entry_id, source_key, sense_ord
-          FROM "${tableAlias}".WebGlossPrefixTop
-          WHERE prefix = ?`)
-        params.push(term)
-      } else {
-        parts.push(`
-          SELECT s.entry_id AS entry_id, e.source_key AS source_key, s.ord AS sense_ord
-          FROM "${lang}".SenseGloss sg
-          JOIN main.Sense s ON s.sense_id = sg.sense_id
-          JOIN main.Entry e ON e.entry_id = s.entry_id
-          WHERE sg.rowid IN (
-            SELECT rowid FROM "${lang}".GlossSearchFts WHERE text MATCH ?
-          )`)
-        params.push(matchToken(term, true))
-      }
-    }
+    const fragments = langs.map((lang) => glossFragment(db, lang, tableName, keyColumn, term, ftsIsPrefix))
     const rows = queryRows(db, `
-      WITH matches AS (${parts.join(' UNION ALL ')})
+      WITH matches AS (${fragments.map((f) => f.sql).join(' UNION ALL ')})
       SELECT entry_id, source_key, MIN(sense_ord) AS sense_ord
       FROM matches
       GROUP BY entry_id
       ORDER BY sense_ord, entry_id
       LIMIT ?`,
-    [...params, limit - order.length + seen.size])
+    [...fragments.map((f) => f.param), limit - order.length + seen.size])
     for (const row of rows) {
       const id = idColumn === 'source_key' ? Number(row['source_key']) : (row['entry_id'] as number)
       if (!seen.has(id)) { seen.add(id); order.push(id) }
       if (order.length >= limit) break
     }
   } catch { /* skip on FTS error or no match */ }
+}
+
+function glossPrefixStep(
+  db: AnyDB, langs: string[], term: string, idColumn: 'source_key' | 'entry_id',
+  seen: Set<number>, order: number[], limit: number,
+) {
+  glossMergeStep(db, langs, term, 'WebGlossPrefixTop', 'prefix', true, idColumn, seen, order, limit)
+}
+
+// Word/forward search's exact tier is safely left unaccelerated because
+// homograph counts are small, but that doesn't hold for gloss text -- a
+// single common word as someone's entire gloss is ordinary language (24523
+// real v18 English entries have exactly "a"), and an unbounded live FTS
+// scan over one has no timeout: it can block the search worker
+// indefinitely, not just run slowly (found live, after WebGlossPrefixTop
+// alone shipped -- see Database.md's Web Gloss Pack section).
+function glossExactStep(
+  db: AnyDB, langs: string[], term: string, idColumn: 'source_key' | 'entry_id',
+  seen: Set<number>, order: number[], limit: number,
+) {
+  glossMergeStep(db, langs, term, 'WebGlossExactTop', 'term', false, idColumn, seen, order, limit)
 }
 
 function assembleEntryBySeq(
