@@ -50,6 +50,12 @@ function useGitenderPath(): boolean {
 // accepts a Module overrides object. Cast to accept the locateFile option.
 const initFn = sqlite3InitModule as (opts: Record<string, unknown>) => Promise<Sqlite3Static>
 
+// WASM initialization is deferred until the main thread sends the initWasm
+// message (optionally carrying a pre-compiled WebAssembly.Module to avoid
+// re-compilation on worker restart). All other messages wait on this promise.
+let readyResolve!: (s: Sqlite3Static) => void
+const ready = new Promise<Sqlite3Static>((resolve) => { readyResolve = resolve })
+
 function remoteVfsOptions(): { cacheSize: number; maxMergeBytes: number } {
   const nav = navigator as Navigator & {
     deviceMemory?: number
@@ -73,17 +79,6 @@ function remoteVfsOptions(): { cacheSize: number; maxMergeBytes: number } {
       : 256 * 1024
   return { cacheSize, maxMergeBytes }
 }
-
-const ready = initFn({
-  locateFile: (file: string) => `/${file}`,
-  print: (s: string) => console.log('[sqlite]', s),
-  printErr: (s: string) => console.error('[sqlite]', s),
-}).then((s) => {
-  sqlite3 = s
-  // Registers the "http" VFS (Phase E) so a pack not installed locally can be
-  // queried directly over HTTP Range requests instead — see httpVfs.ts.
-  installHttpVfs(s, remoteVfsOptions())
-})
 
 // SQLite's file: URI syntax treats the FIRST unescaped '?' as introducing
 // ITS OWN vfs=/mode=/... parameter list and strips everything from there
@@ -147,6 +142,39 @@ async function attachSource(db: AnyDB, alias: string, source: PackSource, hasOpf
 
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
   const msg = e.data
+
+  // The first message must be initWasm, which carries an optional pre-compiled
+  // WebAssembly.Module to skip re-compilation on worker restart. Every other
+  // message waits on the `ready` promise that resolves once WASM is live.
+  if (msg.type === 'initWasm') {
+    try {
+      const opts: Record<string, unknown> = {
+        locateFile: (file: string) => `/${file}`,
+        print: (s: string) => console.log('[sqlite]', s),
+        printErr: (s: string) => console.error('[sqlite]', s),
+      }
+      if (msg.wasmModule) {
+        const module = msg.wasmModule // captured, not transferred — structured clone shares compiled code
+        opts.instantiateWasm = (imports: WebAssembly.Imports, successCallback: (instance: WebAssembly.Instance) => void) => {
+          WebAssembly.instantiate(module, imports).then((instance) => successCallback(instance))
+          return {} // Emscripten expects an empty object when calling successCallback manually
+        }
+      }
+      const s = await initFn(opts)
+      sqlite3 = s
+      // Registers the "http" VFS (Phase E) so a pack not installed locally can be
+      // queried directly over HTTP Range requests instead — see httpVfs.ts.
+      installHttpVfs(s, remoteVfsOptions())
+      readyResolve(s)
+    } catch (err) {
+      console.error('[sqlite] WASM initialization failed:', err)
+      // Reject all pending messages by leaving `ready` unresolved — they will
+      // accumulate until the worker is terminated.
+    }
+    return
+  }
+
+  // All other messages wait for WASM to be ready.
   try {
     await ready
     const result = await dispatch(msg)

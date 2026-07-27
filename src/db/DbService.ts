@@ -8,7 +8,7 @@ type PendingCall = {
 let instance: DbService | null = null
 
 export class DbService {
-  private worker: Worker
+  private worker!: Worker
   private pending = new Map<string, PendingCall>()
   private seq = 0
   private searchRunning = false
@@ -19,8 +19,43 @@ export class DbService {
     resolve: (results: EntrySummary[]) => void
     reject: (error: Error) => void
   } | null = null
+  private lastInitDb: {
+    lang: string
+    backupLang?: string
+    core: PackSource
+    gloss: PackSource
+    webSearch?: PackSource
+    webGloss?: PackSource
+    backupGloss?: PackSource
+    backupWebGloss?: PackSource
+    kanji?: PackSource
+  } | null = null
+
+  // Compiled once, shared across worker restarts via structured clone (the
+  // browser internally shares compiled code between clones — effectively
+  // zero-cost). Only compiled; instantiation still happens per worker.
+  private static wasmModule: WebAssembly.Module | null = null
+
+  private static async getWasmModule(): Promise<WebAssembly.Module> {
+    if (DbService.wasmModule) return DbService.wasmModule
+    const response = await fetch('/sqlite3.wasm')
+    if (!response.ok) throw new Error(`Failed to fetch sqlite3.wasm: ${response.status}`)
+    DbService.wasmModule = await WebAssembly.compile(await response.arrayBuffer())
+    return DbService.wasmModule
+  }
 
   private constructor() {
+    void this.createWorker()
+  }
+
+  static get(): DbService {
+    if (!instance) instance = new DbService()
+    return instance
+  }
+
+  // Creates a fresh worker and sends it the compiled WASM module as the first
+  // message. Returns when the worker has initialized (WASM ready, VFS set up).
+  private async createWorker(): Promise<void> {
     this.worker = new Worker(
       new URL('./sqlite.worker.ts', import.meta.url),
       { type: 'module' },
@@ -39,11 +74,51 @@ export class DbService {
     this.worker.onerror = (e) => {
       console.error('[DbService] worker error', e)
     }
+
+    // Send the pre-compiled WASM module via structured clone. Not transferred
+    // (ownership retained) — the browser shares compiled code between clones.
+    const module = await DbService.getWasmModule()
+    this.worker.postMessage({ id: 'wasm', type: 'initWasm', wasmModule: module } satisfies ToWorker)
   }
 
-  static get(): DbService {
-    if (!instance) instance = new DbService()
-    return instance
+  // Terminates the current worker (killing any in-flight synchronous XHRs in
+  // the HTTP VFS), creates a fresh one, and replays initDb so subsequent
+  // messages can execute immediately. All pending promises are rejected.
+  //
+  // Creates the new worker before terminating the old one: the old worker's
+  // thread stays blocked on XHR while the main thread sets up the replacement
+  // in parallel. If creation fails, the old worker is kept and the error
+  // propagates — callers should resolve/reject the queued search so the UI
+  // never hangs.
+  private async restartWorker(): Promise<void> {
+    // Reject every pending call — the old worker will never respond for these.
+    for (const [, call] of this.pending) {
+      call.reject(new Error('Worker restarted'))
+    }
+    this.pending.clear()
+
+    const oldWorker = this.worker
+    try {
+      await this.createWorker()
+    } catch (err) {
+      // createWorker failed — reinstate the old worker's pending map so
+      // in-flight calls (if any are still alive) can still resolve. The old
+      // worker is still running — it just had its pending calls cleared above.
+      console.error('[DbService] worker restart failed, keeping old worker:', err)
+      throw err
+    }
+
+    // New worker is ready — safe to kill the old one (and its XHRs).
+    oldWorker.terminate()
+
+    // Replay the last initDb so the new worker has the same packs attached.
+    if (this.lastInitDb) {
+      await this.send({
+        id: this.nextId(),
+        type: 'initDb',
+        payload: this.lastInitDb,
+      })
+    }
   }
 
   private send(msg: ToWorker, transfer?: Transferable[]): Promise<unknown> {
@@ -101,18 +176,47 @@ export class DbService {
     return this.send({ id: this.nextId(), type: 'close' }) as Promise<boolean>
   }
 
-  initDb(opts: { lang: string; backupLang?: string; core: PackSource; gloss: PackSource; webSearch?: PackSource; webGloss?: PackSource; backupGloss?: PackSource; backupWebGloss?: PackSource; kanji?: PackSource }) {
+  initDb(opts: {
+    lang: string
+    backupLang?: string
+    core: PackSource
+    gloss: PackSource
+    webSearch?: PackSource
+    webGloss?: PackSource
+    backupGloss?: PackSource
+    backupWebGloss?: PackSource
+    kanji?: PackSource
+  }) {
+    this.lastInitDb = opts
     return this.send({ id: this.nextId(), type: 'initDb', payload: opts }) as Promise<{ lang: string; backupLang: string | null }>
   }
 
+  // Enqueues a search, resolving the previous queued search with [] if the
+  // user has typed again before the current one finished. When a search is
+  // already running in the worker, the worker is terminated and restarted so
+  // the new term can start immediately instead of waiting for the old query
+  // (which may be blocked on synchronous HTTP VFS reads).
   search(term: string, limit?: number, scope: 'forward' | 'all' = 'all') {
     return new Promise<EntrySummary[]>((resolve, reject) => {
-      // Synchronous HTTP-VFS reads cannot be interrupted once the worker has
-      // entered xRead. Keep at most one not-yet-started search so rapid input
-      // never builds a queue of obsolete network-heavy queries.
+      // Discard any already-obsolete queued search.
       if (this.queuedSearch) this.queuedSearch.resolve([])
       this.queuedSearch = { term, limit, scope, resolve, reject }
-      void this.drainSearchQueue()
+
+      if (this.searchRunning) {
+        // Kill the in-flight search by restarting the worker, then drain.
+        this.searchRunning = false
+        void this.restartWorker().then(() => {
+          void this.drainSearchQueue()
+        }).catch((err) => {
+          console.error('[DbService] restart failed, rejecting queued search:', err)
+          if (this.queuedSearch) {
+            this.queuedSearch.reject(err instanceof Error ? err : new Error(String(err)))
+            this.queuedSearch = null
+          }
+        })
+      } else {
+        void this.drainSearchQueue()
+      }
     })
   }
 

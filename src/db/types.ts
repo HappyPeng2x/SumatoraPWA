@@ -123,6 +123,7 @@ export interface KanjiInfo {
 
 // Messages sent from main thread to the SQLite worker
 export type ToWorker =
+  | { id: string; type: 'initWasm'; wasmModule?: WebAssembly.Module }
   | { id: string; type: 'ping' }
   | { id: string; type: 'hasFile'; payload: { filename: string } }
   | { id: string; type: 'writeFile'; payload: { filename: string; data: ArrayBuffer } }
