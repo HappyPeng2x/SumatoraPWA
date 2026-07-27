@@ -19,6 +19,12 @@ npm run dev
 Use `npm run build` for a production build and `npm run lint` for static
 checks.
 
+## Documentation
+
+- [Search query flow](docs/search-query-flow.md) — every SQL query that
+  executes when a user types into the search box, the HTTP request budget
+  per scenario, and the cache layers involved.
+
 ## Source and licensing
 
 Copyright (C) 2026 Sumatora contributors.
