@@ -3,7 +3,14 @@ import type { EntrySummary } from '../db/types'
 import { DbService } from '../db/DbService'
 import { getCachedSearch, saveCachedSearch } from '../db/DictionaryStore'
 
-const SEARCH_DEBOUNCE_MS = 100
+// 100ms only protected touch-typists faster than that; anyone typing at a
+// normal-to-relaxed pace (most people, most of the time) fired one throwaway
+// query per intermediate letter, occasionally an expensive one (measured:
+// a single stray keystroke's reverse-gloss search ran 91 range requests /
+// ~2s for nothing, then blocked the next real query in queue behind it).
+// 275ms covers ordinary typing speed while still feeling instant for anyone
+// who pauses to actually look at a result.
+const SEARCH_DEBOUNCE_MS = 275
 // Matches how many result cards fit on screen without scrolling -- fetching
 // more up front is wasted work regardless of how fast the query is.
 const ONLINE_PAGE_SIZE = 12
