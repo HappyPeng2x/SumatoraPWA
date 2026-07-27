@@ -16,7 +16,26 @@ interface Props {
 export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick, onActivityChange }: Props) {
   const [term, setTerm] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const resultsContainerRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
   const { results, loading, refining, loadMore, canLoadMore } = useSearch(term, dbState)
+
+  // Infinite scroll: observe a sentinel at the bottom of the results list.
+  // When it approaches the viewport, trigger loadMore automatically.
+  useEffect(() => {
+    if (!canLoadMore || loading || refining) return
+    const sentinel = sentinelRef.current
+    const root = resultsContainerRef.current
+    if (!sentinel || !root) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) loadMore()
+      },
+      { root, rootMargin: '200px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [canLoadMore, loading, refining, loadMore])
 
   // Surfaces search activity to the header's animated indicator (see
   // HeaderIndicators) -- the header is shared across tabs, so this state
@@ -106,7 +125,7 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
       </div>
 
       {/* Results area */}
-      <div className="flex flex-1 flex-col overflow-y-auto">
+      <div ref={resultsContainerRef} className="flex flex-1 flex-col overflow-y-auto">
         {isEmpty ? (
           <div className="flex flex-1 items-center justify-center p-8">
             {emptyHint()}
@@ -137,14 +156,7 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
               </div>
             )}
             {canLoadMore && !refining && (
-              <div className="p-3 text-center">
-                <button
-                  onClick={loadMore}
-                  className="rounded border border-slate-600 px-4 py-2 text-xs text-slate-300 hover:border-accent-500 hover:text-white"
-                >
-                  Load more results
-                </button>
-              </div>
+              <div ref={sentinelRef} className="h-px" />
             )}
           </div>
         )}
