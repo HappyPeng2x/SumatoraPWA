@@ -86,7 +86,7 @@ export default function EntryCard({ entry, isBookmarked, onToggleBookmark, onOpe
       {tags && tags.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {tags.map((tag, i) => (
-            <span key={i} className="rounded-full bg-indigo-900 px-2 py-0.5 text-xs text-indigo-300">
+            <span key={i} className="rounded-full bg-accent-900 px-2 py-0.5 text-xs text-accent-300">
               {tag}
             </span>
           ))}

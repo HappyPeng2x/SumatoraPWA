@@ -16,7 +16,7 @@ function ProgressBar({ p }: { p: DownloadProgress }) {
       {p.phase !== 'error' && (
         <div className="h-1.5 w-full rounded-full bg-slate-600">
           <div
-            className="h-1.5 rounded-full bg-indigo-400 transition-all"
+            className="h-1.5 rounded-full bg-accent-400 transition-all"
             style={{ width: pct !== null ? `${pct}%` : '100%', animation: pct === null ? 'pulse 1s infinite' : undefined }}
           />
         </div>
@@ -63,7 +63,7 @@ function DictRow({
           {!isInstalled && !isDownloading && (
             <button
               onClick={() => onInstall(meta)}
-              className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+              className="rounded bg-accent-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-500"
             >
               Install
             </button>

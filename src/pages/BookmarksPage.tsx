@@ -72,7 +72,7 @@ export default function BookmarksPage({ bookmarkedSeqs, toggleBookmark, onOpenDe
           value={filterText}
           onChange={e => setFilterText(e.target.value)}
           placeholder="Filter bookmarks…"
-          className="w-full rounded-lg bg-slate-700 px-4 py-2.5 text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full rounded-lg bg-slate-700 px-4 py-2.5 text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-accent-500"
         />
       </div>
 
@@ -82,7 +82,7 @@ export default function BookmarksPage({ bookmarkedSeqs, toggleBookmark, onOpenDe
           {selectedTag && (
             <button
               onClick={onClearTag}
-              className="flex-shrink-0 rounded-full bg-indigo-600 px-3 py-1 text-xs font-medium text-white"
+              className="flex-shrink-0 rounded-full bg-accent-600 px-3 py-1 text-xs font-medium text-white"
             >
               {selectedTag} ×
             </button>

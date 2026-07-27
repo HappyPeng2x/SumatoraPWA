@@ -25,7 +25,7 @@ export default function TabBar({ activeTab, onTabChange }: TabBarProps) {
           className={[
             'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-xs transition-colors',
             activeTab === tab.id
-              ? 'text-indigo-400'
+              ? 'text-accent-400'
               : 'text-slate-400 hover:text-slate-200',
           ].join(' ')}
         >

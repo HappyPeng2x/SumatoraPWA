@@ -1,5 +1,75 @@
 @import "tailwindcss";
 
+/* Registers the `accent` color scale so bg-accent-500/text-accent-400/etc.
+   utilities exist. Tailwind v4 generates these utilities as `var(--color-
+   accent-*)` references rather than inlined hex values, so redefining the
+   same custom properties under [data-theme] below re-themes every one of
+   those utilities at runtime with no JS-side class swapping needed. Values
+   here match [data-theme="tora"] (the default) so a pre-hydration paint and
+   the "no theme picked yet" case both already look right. */
+@theme {
+  --color-accent-100: #fde9e7;
+  --color-accent-200: #fbcac6;
+  --color-accent-300: #f8a29b;
+  --color-accent-400: #f47167;
+  --color-accent-500: #ef3b2e;
+  --color-accent-600: #d51d10;
+  --color-accent-700: #ab170d;
+  --color-accent-900: #5f0d07;
+}
+
+/* Tora (default): the tiger mascot's own brand red (accent-600 ≈ the
+   Android app's launcher-icon background, #D41610) -- ties the PWA's accent
+   directly to the actual app icon instead of a generic default. */
+:root[data-theme="tora"] {
+  --color-accent-100: #fde9e7;
+  --color-accent-200: #fbcac6;
+  --color-accent-300: #f8a29b;
+  --color-accent-400: #f47167;
+  --color-accent-500: #ef3b2e;
+  --color-accent-600: #d51d10;
+  --color-accent-700: #ab170d;
+  --color-accent-900: #5f0d07;
+}
+
+/* Indigo: the original accent, and a closer match to the Android app's own
+   Material indigo seed (md_primary #4355B9) for anyone who prefers that. */
+:root[data-theme="indigo"] {
+  --color-accent-100: #e0e7ff;
+  --color-accent-200: #c7d2fe;
+  --color-accent-300: #a5b4fc;
+  --color-accent-400: #818cf8;
+  --color-accent-500: #6366f1;
+  --color-accent-600: #4f46e5;
+  --color-accent-700: #4338ca;
+  --color-accent-900: #312e81;
+}
+
+/* Jade: calm teal-green alternative. */
+:root[data-theme="jade"] {
+  --color-accent-100: #ebf9f5;
+  --color-accent-200: #d0f1e6;
+  --color-accent-300: #ace7d3;
+  --color-accent-400: #81dabc;
+  --color-accent-500: #51cda3;
+  --color-accent-600: #34b288;
+  --color-accent-700: #298e6d;
+  --color-accent-900: #174f3c;
+}
+
+/* Sakura: muted dusty rose, a nod to the dictionary's Japanese subject
+   without tipping into neon pink. */
+:root[data-theme="sakura"] {
+  --color-accent-100: #f9ebf0;
+  --color-accent-200: #f1d0db;
+  --color-accent-300: #e7acc0;
+  --color-accent-400: #da819e;
+  --color-accent-500: #cd517a;
+  --color-accent-600: #b2345e;
+  --color-accent-700: #8e294b;
+  --color-accent-900: #4f172a;
+}
+
 :root {
   color-scheme: light dark;
   -webkit-font-smoothing: antialiased;

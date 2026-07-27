@@ -20,7 +20,7 @@ function Clickable({ text, onClick }: { text: string; onClick: () => void }) {
   return (
     <span
       onClick={(e) => { e.stopPropagation(); onClick() }}
-      className="cursor-pointer hover:text-indigo-300"
+      className="cursor-pointer hover:text-accent-300"
       role="button"
       tabIndex={0}
     >

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState, useEffect, useRef } from 'react'
 import { getSetting, setSetting } from '../db/DictionaryStore'
 import { exportBookmarks, importBookmarks } from '../db/BookmarkStore'
+import { THEMES, applyTheme, getStoredTheme } from '../theme'
 
 const DictionaryManager = lazy(() => import('../components/DictionaryManager'))
 
@@ -19,6 +20,7 @@ const LANGUAGES = [
 export default function SettingsPage() {
   const [primaryLang, setPrimaryLang] = useState('eng')
   const [backupLang, setBackupLang] = useState('')
+  const [theme, setTheme] = useState(getStoredTheme)
   const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -42,6 +44,11 @@ export default function SettingsPage() {
     setBackupLang(lang)
     setSetting('backupLang', lang)
     window.dispatchEvent(new CustomEvent('sumatora:lang-changed'))
+  }
+
+  function handleThemeChange(id: string) {
+    setTheme(id)
+    applyTheme(id)
   }
 
   async function handleExport() {
@@ -85,7 +92,7 @@ export default function SettingsPage() {
             <select
               value={primaryLang}
               onChange={e => handlePrimaryChange(e.target.value)}
-              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-accent-500"
             >
               {LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>{l.label}</option>
@@ -97,7 +104,7 @@ export default function SettingsPage() {
             <select
               value={backupLang}
               onChange={e => handleBackupChange(e.target.value)}
-              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full rounded bg-slate-700 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-accent-500"
             >
               <option value="">None</option>
               {LANGUAGES.filter(l => l.code !== primaryLang).map((l) => (
@@ -105,6 +112,34 @@ export default function SettingsPage() {
               ))}
             </select>
           </div>
+        </div>
+      </section>
+
+      <section className="mb-6">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          Appearance
+        </h3>
+        <div className="grid grid-cols-4 gap-2">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => handleThemeChange(t.id)}
+              aria-pressed={theme === t.id}
+              className={`flex flex-col items-center gap-1.5 rounded-lg border p-2.5 transition-colors ${
+                theme === t.id
+                  ? 'border-accent-500 bg-slate-800'
+                  : 'border-slate-700 bg-slate-800 hover:border-slate-600'
+              }`}
+            >
+              <span
+                className="h-7 w-7 rounded-full ring-2 ring-slate-900 ring-offset-2 ring-offset-slate-800"
+                style={{ background: `linear-gradient(135deg, ${t.swatch[0]}, ${t.swatch[1]})` }}
+              />
+              <span className={`text-xs ${theme === t.id ? 'text-slate-100' : 'text-slate-400'}`}>
+                {t.label}
+              </span>
+            </button>
+          ))}
         </div>
       </section>
 
@@ -155,7 +190,7 @@ export default function SettingsPage() {
               href="https://github.com/HappyPeng2x/SumatoraPWA/blob/master/LICENSE"
               target="_blank"
               rel="noreferrer"
-              className="text-indigo-400 underline hover:text-indigo-300"
+              className="text-accent-400 underline hover:text-accent-300"
             >
               GNU AGPL v3
             </a>
@@ -165,7 +200,7 @@ export default function SettingsPage() {
               href="https://github.com/HappyPeng2x/SumatoraPWA"
               target="_blank"
               rel="noreferrer"
-              className="text-indigo-400 underline hover:text-indigo-300"
+              className="text-accent-400 underline hover:text-accent-300"
             >
               Corresponding source code
             </a>

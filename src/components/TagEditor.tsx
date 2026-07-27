@@ -39,14 +39,14 @@ export default function TagEditor({ tags, onSave, onCancel }: Props) {
   }
 
   return (
-    <div className="mt-2 rounded-lg border border-indigo-700 bg-slate-800 p-2">
+    <div className="mt-2 rounded-lg border border-accent-700 bg-slate-800 p-2">
       <div className="mb-2 flex flex-wrap gap-1">
         {current.map(tag => (
-          <span key={tag} className="flex items-center gap-1 rounded-full bg-indigo-900 px-2 py-0.5 text-xs text-indigo-300">
+          <span key={tag} className="flex items-center gap-1 rounded-full bg-accent-900 px-2 py-0.5 text-xs text-accent-300">
             {tag}
             <button
               onClick={() => removeTag(tag)}
-              className="text-indigo-400 hover:text-white"
+              className="text-accent-400 hover:text-white"
               aria-label={`Remove ${tag}`}
             >
               ×
@@ -61,7 +61,7 @@ export default function TagEditor({ tags, onSave, onCancel }: Props) {
         onKeyDown={handleKeyDown}
         onBlur={() => { if (input.trim()) addTag() }}
         placeholder="Add tag, press Enter…"
-        className="w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 outline-none focus:ring-1 focus:ring-indigo-500"
+        className="w-full rounded bg-slate-700 px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 outline-none focus:ring-1 focus:ring-accent-500"
       />
       <div className="mt-2 flex justify-end gap-2">
         <button onClick={onCancel} className="px-3 py-1 text-xs text-slate-400 hover:text-slate-200">
@@ -69,7 +69,7 @@ export default function TagEditor({ tags, onSave, onCancel }: Props) {
         </button>
         <button
           onClick={() => onSave(current)}
-          className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
+          className="rounded bg-accent-600 px-3 py-1 text-xs text-white hover:bg-accent-500"
         >
           Save
         </button>
