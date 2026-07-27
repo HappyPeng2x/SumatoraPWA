@@ -304,7 +304,7 @@ numbers are higher (add ~5–10 requests for schema/index initialisation).
 ### Latin-script input — forward + reverse gloss
 
 | Mode | Forward | Gloss tier | Rendering | Total requests | Typical time |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | Remote (v2 web-gloss, covering hit) | 2–5 | 1 | gitender: 0–12 | **3–18** | **100–400 ms** |
 | Remote (v2 web-gloss, FTS fallback) | 2–5 | 5–30 | gitender: 0–12 | **7–47** | **200–1000 ms** |
 | Remote (v1 web-gloss, cross-pack) | 2–5 | 30–100+ | gitender: 0–12 | **32–117** | **1500–5000 ms** |
