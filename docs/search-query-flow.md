@@ -66,15 +66,37 @@ minimise HTTP round-trips.
 ## Forward search (all modes)
 
 Forward search matches the user's input against Japanese writing, kana, and
-romaji forms. It runs in two sub-tiers:
+romaji forms. It runs in two sub-tiers, both of which need to produce
+results in Android's four-band ranking order:
 
-- **Exact tier** — exact match on the normalized term.
-- **Prefix tier** — prefix match (term followed by `*` in FTS5 syntax).
+| Band | Android tier | Script | Priority |
+|---|---|---|---|
+| 0 | Exact/prefix writing | writing (`漢字`) | priority (`news1`, `ichi1`, etc.) |
+| 1 | Exact/prefix kana | kana (`カンジ`) | priority |
+| 2 | Exact/prefix writing | writing | non-priority |
+| 3 | Exact/prefix kana | kana | non-priority |
 
-Both tiers feed into a combined query that deduplicates by `entry_id`,
-assigns a tier number (0–3: priority writing, priority kana, non-priority
-writing, non-priority kana), and orders by tier, entry score, and entry ID.
-This mirrors Android's ranking order.
+The exact and prefix tiers handle these four bands differently:
+
+- **Prefix tier** — splits into four separate queries, one per band. Each
+  query has a simple `WHERE script_order = ? AND priority ? 0` filter and
+  is naturally bounded to a single band. A covering table
+  (`WebSearchPrefixTop`) pre-materialises the busiest `(script_order,
+  prefix, priority_class)` groups so they resolve in a single indexed seek
+  instead of a live FTS scan.
+
+- **Exact tier** — combines all four bands into a single query with a CTE,
+  `UNION ALL`, and `CASE` expressions. This is because the exact tier has
+  no covering table: exact matches are inherently small (homograph counts
+  are in the single digits per form — a given writing like `日本` matches
+  only a handful of entries), so the live query is always cheap. The four
+  bands are ranked inline rather than split across calls to keep the
+  deduplication (`GROUP BY source_key`, `MIN(tier)`) in one place.
+
+The prefix tier is split because broad prefixes can match thousands of
+entries, making the covering table worth the complexity of per-band calls.
+The exact tier is combined because the per-band overhead isn't justified
+when each band returns only a few rows.
 
 ### Remote mode (web-search pack path)
 
@@ -82,8 +104,10 @@ When `currentHasWebSearch && useGitenderPath()`, the dedicated 24 MB
 `sumatora_web_search.db` is used. This pack carries only the data needed to
 match a normalized term to a JMdict sequence number — no display data.
 
-**Exact tier** — combined writing + kana FTS5 query against `WebSearchFts`,
-joined to `WebSearchResult` for scoring metadata:
+**Exact tier** — single query covering all four ranking bands. The CTE
+unions two script queries (writing + kana), each using a `CASE` to inline
+the priority/non-priority tier number, then groups by `source_key` to
+deduplicate entries that matched both scripts:
 
 ```sql
 WITH candidates AS (
@@ -109,11 +133,11 @@ ORDER BY tier, entry_score DESC, entry_id
 LIMIT ?
 ```
 
-**Prefix tier** — same structure, with `*` appended to the match tokens
-(`'"日本"*'`, `'"ニホン"*'`). A fast path first probes `WebSearchPrefixTop`,
-a covering table that materialises pre-ranked results for any `(script_order,
-prefix, priority_class)` group with more than 50 raw candidates in the FTS
-index. If the probe finds rows, the query is a single indexed seek:
+**Prefix tier** — split into four per-band calls. Each call first probes
+`WebSearchPrefixTop`, a covering table that materialises pre-ranked results
+for any `(script_order, prefix, priority_class)` group with more than 50
+raw candidates. If the probe hits, the query is a single indexed seek
+(no CTE, no JOIN):
 
 ```sql
 SELECT source_key
@@ -123,9 +147,26 @@ ORDER BY entry_score DESC, entry_id
 LIMIT ?
 ```
 
-If the prefix is too narrow to have been materialised at build time, the
-same live FTS query as the exact tier runs, just with prefix match tokens
-— narrow prefixes are cheap to scan regardless.
+If the prefix is too narrow to have been materialised (≤ 50 candidates),
+a per-band live FTS query runs — simpler than the exact tier because the
+`script_order` and `priority` filters already isolate one band:
+
+```sql
+SELECT wr.source_key AS source_key,
+       MAX(wr.entry_score) AS entry_score, MIN(wr.entry_id) AS entry_id
+FROM websearch.WebSearchResult wr
+WHERE wr.script_order = ? AND wr.priority ? 0
+  AND wr.search_id IN (
+    SELECT rowid FROM websearch.WebSearchFts WHERE normalized MATCH '"日本"*'
+  )
+GROUP BY wr.source_key
+ORDER BY entry_score DESC, entry_id
+LIMIT ?
+```
+
+The four calls run in Android band order: priority-writing, priority-kana,
+non-priority-writing, non-priority-kana. Earlier bands push results into
+`seen`/`order` first; later bands skip already-matched entries.
 
 **Timing**: typ. 3–15 HTTP Range requests, 150–800 ms. The web-search pack
 is 24 MB; its hot FTS pages fit comfortably in the VFS page cache.
