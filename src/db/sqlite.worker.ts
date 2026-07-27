@@ -34,6 +34,11 @@ let currentHasPrefixTop = false
 // since one could be remote while the other is already installed locally.
 let currentHasWebGloss = false
 let currentHasBackupWebGloss = false
+// The v2 webgloss pack carries a full-coverage FTS5 fallback (GlossAllFts)
+// so narrow terms that miss the covering tables still resolve within the
+// small pack instead of a cross-pack JOIN to the 200MB core.
+let currentHasGlossAllFts = false
+let currentHasBackupGlossAllFts = false
 const searchResultCache = new Map<string, EntrySummary[]>()
 const SEARCH_RESULT_CACHE_SIZE = 32
 
@@ -299,6 +304,8 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
       currentHasPrefixTop = false
       currentHasWebGloss = false
       currentHasBackupWebGloss = false
+      currentHasGlossAllFts = false
+      currentHasBackupGlossAllFts = false
       searchResultCache.clear()
 
       // main.Entry / main.EntryForm / main.Sense / main.SearchTerm are the
@@ -324,6 +331,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
             try {
               await attachSource(db, 'webgloss', webGloss, true)
               currentHasWebGloss = hasTable(db, 'webgloss', 'WebGlossPrefixTop')
+              currentHasGlossAllFts = hasTable(db, 'webgloss', 'GlossAllFts')
             } catch { /* fall back to live gloss FTS */ }
           }
           if (backupGloss) {
@@ -334,6 +342,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
                 try {
                   await attachSource(db, 'webglossBackup', backupWebGloss, true)
                   currentHasBackupWebGloss = hasTable(db, 'webglossBackup', 'WebGlossPrefixTop')
+                  currentHasBackupGlossAllFts = hasTable(db, 'webglossBackup', 'GlossAllFts')
                 } catch { /* fall back to live gloss FTS */ }
               }
             } catch { /* backup not available — silently skip */ }
@@ -356,6 +365,8 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           currentHasPrefixTop = false
           currentHasWebGloss = false
           currentHasBackupWebGloss = false
+          currentHasGlossAllFts = false
+          currentHasBackupGlossAllFts = false
         }
       }
 
@@ -374,6 +385,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
           try {
             await attachSource(db, 'webgloss', webGloss, false)
             currentHasWebGloss = hasTable(db, 'webgloss', 'WebGlossPrefixTop')
+            currentHasGlossAllFts = hasTable(db, 'webgloss', 'GlossAllFts')
           } catch { /* fall back to live gloss FTS */ }
         }
         if (backupGloss) {
@@ -384,6 +396,7 @@ async function dispatch(msg: ToWorker): Promise<unknown> {
               try {
                 await attachSource(db, 'webglossBackup', backupWebGloss, false)
                 currentHasBackupWebGloss = hasTable(db, 'webglossBackup', 'WebGlossPrefixTop')
+                currentHasBackupGlossAllFts = hasTable(db, 'webglossBackup', 'GlossAllFts')
               } catch { /* fall back to live gloss FTS */ }
             }
           } catch { /* backup not available — silently skip */ }
@@ -824,6 +837,24 @@ function glossFragment(
       }
     }
   }
+  // v2 webgloss packs carry a self-contained FTS5 fallback (GlossAllFts +
+  // GlossAll) that avoids touching the core pack entirely. When available,
+  // prefer it over the old cross-pack live-FTS JOIN, which caused dozens of
+  // HTTP Range reads for each matched sense on remote packs.
+  const ftsSchema = glossAllTable(lang)
+  if (ftsSchema) {
+    return {
+      sql: `
+        SELECT ga.entry_id AS entry_id, ga.source_key AS source_key, ga.sense_ord AS sense_ord
+        FROM "${ftsSchema}".GlossAll ga
+        WHERE ga.rowid IN (
+          SELECT rowid FROM "${ftsSchema}".GlossAllFts WHERE GlossAllFts MATCH ?
+        )`,
+      param: matchToken(term, ftsIsPrefix),
+    }
+  }
+
+  // Pre-v2 webgloss pack (or no webgloss at all): cross-pack live-FTS JOIN.
   return {
     sql: `
       SELECT s.entry_id AS entry_id, e.source_key AS source_key, s.ord AS sense_ord
@@ -835,6 +866,14 @@ function glossFragment(
       )`,
     param: matchToken(term, ftsIsPrefix),
   }
+}
+
+/** Returns the schema alias ('webgloss' or 'webglossBackup') whose v2+
+ *  GlossAllFts table covers `lang`, or null for pre-v2 packs. */
+function glossAllTable(lang: string): string | null {
+  if (lang === currentLang && currentHasGlossAllFts) return 'webgloss'
+  if (lang === currentBackupLang && currentHasBackupGlossAllFts) return 'webglossBackup'
+  return null
 }
 
 // Merges glossFragment's per-language choice into one query, across every
