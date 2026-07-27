@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useSearch } from '../hooks/useSearch'
 import EntryCard from '../components/EntryCard'
 import type { DbInitState } from '../hooks/useDbInit'
@@ -10,12 +10,22 @@ interface Props {
   toggleBookmark: (entry: EntrySummary) => Promise<void>
   onOpenDetail: (seq: number) => void
   onKanjiClick: (char: string) => void
+  onActivityChange: (active: boolean) => void
 }
 
-export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick }: Props) {
+export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, onOpenDetail, onKanjiClick, onActivityChange }: Props) {
   const [term, setTerm] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const { results, loading, refining, loadMore, canLoadMore } = useSearch(term, dbState)
+
+  // Surfaces search activity to the header's animated indicator (see
+  // HeaderIndicators) -- the header is shared across tabs, so this state
+  // has to live above SearchPage. App.tsx only shows the indicator while
+  // the search tab is active, so a stale true left behind when this page
+  // unmounts (switching tabs) is harmless.
+  useEffect(() => {
+    onActivityChange(loading || refining)
+  }, [loading, refining, onActivityChange])
 
   const handleClear = useCallback(() => {
     setTerm('')
@@ -67,13 +77,6 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Online-mode indicator: searching a remote pack rather than a local install (Phase E) */}
-      {dbState.ready && dbState.isRemote && (
-        <div className="border-b border-sky-800 bg-sky-900/30 px-3 py-1.5 text-center text-xs text-sky-300">
-          Searching online — install dictionaries in Settings for offline use.
-        </div>
-      )}
-
       {/* Search bar */}
       <div className="border-b border-slate-700 bg-slate-800 px-3 py-2">
         <div className="relative">
@@ -83,7 +86,7 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
             value={term}
             onChange={e => setTerm(e.target.value)}
             placeholder="Search in Japanese, romaji, or English…"
-            className="w-full rounded-lg bg-slate-700 py-2.5 pl-4 pr-10 text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full rounded-lg bg-slate-700 py-2.5 pl-4 pr-10 text-slate-100 placeholder-slate-400 outline-none focus:ring-2 focus:ring-accent-500"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -137,7 +140,7 @@ export default function SearchPage({ dbState, bookmarkedSeqs, toggleBookmark, on
               <div className="p-3 text-center">
                 <button
                   onClick={loadMore}
-                  className="rounded border border-slate-600 px-4 py-2 text-xs text-slate-300 hover:border-indigo-500 hover:text-white"
+                  className="rounded border border-slate-600 px-4 py-2 text-xs text-slate-300 hover:border-accent-500 hover:text-white"
                 >
                   Load more results
                 </button>

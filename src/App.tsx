@@ -4,7 +4,7 @@ import SearchPage from './pages/SearchPage'
 import BookmarksPage from './pages/BookmarksPage'
 import TagsPage from './pages/TagsPage'
 import SettingsPage from './pages/SettingsPage'
-import PWABanners from './components/PWABanners'
+import HeaderIndicators from './components/HeaderIndicators'
 import EntryDetailSheet from './components/EntryDetailSheet'
 import KanjiDetailPopup from './components/KanjiDetailPopup'
 import { useDbInit } from './hooks/useDbInit'
@@ -25,6 +25,7 @@ export default function App() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [detailStack, setDetailStack] = useState<number[]>([])
   const [kanjiChar, setKanjiChar] = useState<string | null>(null)
+  const [searchActive, setSearchActive] = useState(false)
   const dbState = useDbInit()
   const { bookmarkedSeqs, toggleBookmark } = useBookmarks()
 
@@ -58,14 +59,20 @@ export default function App() {
         paddingTop: 'var(--safe-top)',
       }}
     >
-      {/* Header */}
-      <header className="flex items-center border-b border-slate-700 bg-slate-800 px-4 py-3">
-        <h1 className="text-base font-semibold tracking-wide text-slate-100">
+      {/* Header: logo/title on the left, status icons and actions on the
+          right, all in one row instead of stacked banners pushing content
+          down. */}
+      <header className="flex items-center gap-2 border-b border-slate-700 bg-slate-800 px-3 py-2.5">
+        <img src="/logo-header.png" alt="" className="h-7 w-7 shrink-0 rounded-full" />
+        <h1 className="flex-1 truncate text-base font-semibold tracking-wide text-slate-100">
           {PAGE_TITLES[activeTab]}
         </h1>
+        <HeaderIndicators
+          isRemote={dbState.ready && dbState.isRemote}
+          searchActive={activeTab === 'search' && searchActive}
+          onGoToSettings={() => handleTabChange('settings')}
+        />
       </header>
-
-      <PWABanners />
 
       {/* Page content */}
       <main className="flex flex-1 flex-col overflow-hidden">
@@ -76,6 +83,7 @@ export default function App() {
             toggleBookmark={toggleBookmark}
             onOpenDetail={openDetail}
             onKanjiClick={setKanjiChar}
+            onActivityChange={setSearchActive}
           />
         )}
         {activeTab === 'bookmarks' && (
